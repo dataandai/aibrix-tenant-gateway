@@ -1,73 +1,67 @@
-# AWS Production Path
+# 10 — From Reference Lab to Production AWS Design
 
-The AWS demo is intentionally easy to run. A production deployment should be different.
+This document describes what an organization would need to add before treating the architecture as a production AWS platform.
 
-## Phase 1: Demo deployment
+## Current repository level
 
-- EKS managed CPU nodes.
-- Public LoadBalancer Service.
-- Mock auth.
-- Mock upstream.
-- In-memory quota.
-- Observability-mode billing.
-- Stdout audit.
+The repository provides:
 
-Purpose: reviewer can run curl tests and inspect logs.
+- a local demo,
+- a CPU-only AWS demo,
+- an optional advanced GPU full-stack AWS path,
+- tenant-policy gateway code,
+- OIDC/JWKS validation,
+- Redis quota reference,
+- S3/DynamoDB billing reference,
+- AIBrix/vLLM deployment templates,
+- audit and metering hooks.
 
-## Phase 2: Production-like staging
+This is not enough for production certification.
 
-- Private AIBrix upstream Service.
-- Real OIDC/JWKS auth.
-- `APP_SECURITY_POSTURE_MODE=enforce`.
-- `APP_MOCK_UPSTREAM=false`.
-- `APP_REQUIRE_PRIVATE_UPSTREAM=true`.
-- JSONL or external audit sink.
-- Ledger-required billing mode.
-- Internal ALB or Gateway API controller.
-- NetworkPolicy blocking all direct AIBrix access except from the gateway.
+## Production AWS requirements
 
-Purpose: validate governance controls before real tenants.
+### Account and governance
 
-## Phase 3: Production platform work
+- AWS Organizations and account boundaries.
+- SCPs and permission boundaries.
+- Centralized security/audit accounts.
+- IAM access review and break-glass process.
 
-- Private subnets for worker nodes.
-- Controlled ingress through ALB, API Gateway, CloudFront, or VPC Lattice depending on enterprise constraints.
-- TLS termination and cert lifecycle.
-- mTLS/service identity between gateway and AIBrix.
-- Redis/Envoy global rate limiting.
-- Durable billing ledger, ideally Postgres/Kafka/S3 Object Lock style architecture.
-- OpenTelemetry collector and SIEM export.
-- EKS Pod Identity or IRSA for AWS access.
-- Secrets Manager + ASCP for OIDC/client secrets.
-- ECR image scanning, SBOM, signing, and admission policy.
-- GPU node pools with Karpenter or managed node groups.
-- AIBrix/vLLM deployment with real models and explicit LoRA/KV-cache isolation validation.
+### Network
 
-## Minimal production acceptance checklist
+- Private subnets for workloads.
+- Private EKS API endpoint strategy.
+- VPC endpoints for ECR, S3, STS, CloudWatch Logs, Secrets Manager, and required AWS APIs.
+- Controlled NAT or egress proxy for services without endpoints.
+- WAF/Shield/TLS/certificate lifecycle where public ingress exists.
+- Flow logs and network evidence retention.
 
-A real buyer or enterprise reviewer should ask for evidence of:
+### Identity
 
-- OIDC issuer/audience/key rotation tests.
-- No public route to AIBrix/vLLM.
-- Header spoofing cannot change tenant routing.
-- Cross-tenant requests fail closed.
-- Quota is distributed across gateway replicas.
-- Usage events are durable and idempotent.
-- Billing reconciliation exists.
-- Adapter artifacts are signed or otherwise validated.
-- Runtime cache isolation has been tested.
-- Load tests include TTFT, queue time, and streaming behavior.
-- Logs do not contain bearer tokens.
-- Destroy/runbook procedures exist.
+- Enterprise IdP federation.
+- Tenant claim source-of-truth process.
+- Access-token vs ID-token authorization decision.
+- MFA/conditional-access policy.
+- Token revocation and key-rotation playbooks.
 
-## Why this repository now includes both demo and hardening modes
+### LLMOps runtime
 
-A repository that is only production-theory is hard to evaluate. A repository that is only a local mock is easy to dismiss.
+- GPU node autoscaling through Karpenter or equivalent.
+- Model cache strategy.
+- Model registry as runtime source of truth.
+- Adapter signing, scanning, quarantine, and admission controls.
+- KV-cache and batching isolation proof.
+- Load tests for TTFT, queue depth, decode latency, and noisy-neighbor behavior.
 
-The intended reviewer flow is:
+### Billing and audit
 
-1. Run locally.
-2. Deploy the AWS demo.
-3. Inspect policy and audit logs.
-4. Read the production-hardening docs.
-5. Decide which production integrations to replace first: auth, quota, billing, networking, AIBrix runtime, or observability.
+- Billing-grade usage extraction.
+- Streaming usage accounting or explicit product decision to disallow streaming for billable workloads.
+- Reconciliation jobs.
+- Immutable audit retention.
+- SIEM integration.
+- Customer dispute workflow.
+
+## Production decision gate
+
+A buyer or enterprise reviewer should ask for evidence, not only architecture diagrams. Evidence should include live AWS deployment logs, security group/NLB proofs, IAM policy review, VPC endpoint inventory, OIDC claim tests, quota behavior tests, billing idempotency tests, and GPU load-test reports.

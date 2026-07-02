@@ -1,14 +1,19 @@
-# Security Controls Matrix
+# 15 — Security Controls Matrix
 
-| Control | Repo implementation | Evidence | Residual risk |
+This matrix maps repository controls to evidence and known gaps.
+
+| Control area | Implemented reference control | Evidence | Remaining gap |
 |---|---|---|---|
-| Tenant identity | Host tenant resolution + OIDC tenant claim match | `policy_engine.py`, `jwt_validation.py` | Host routing still requires trusted ingress/LB/DNS posture |
-| OIDC hardening | issuer/audience/signature, `exp`, `iat`, `nbf`, optional `token_use`, scope, group checks, JWKS cache | `jwt_validation.py`, `jwks_cache.py` | No IdP federation lifecycle or break-glass process |
-| Header spoofing defense | Client routing headers stripped and trusted headers injected | `header_sanitizer.py`, tests | AIBrix must not be directly reachable by untrusted clients |
-| Runtime quota | In-memory demo + Redis reference backend | `quota_enforcer.py`, `scripts/aws-danger/09-create-redis-quota-backend.sh` | Redis HA/failover and regional consistency not solved |
-| Billing ledger | Local JSONL + AWS-native S3 Object Lock reference | `billing_ledger.py`, `scripts/aws-danger/11-create-aws-native-billing-ledger.sh` | No reconciliation job or invoice-grade controls |
-| Adapter governance | Allowlist + catalog + artifact SHA verification utility | `adapter_governance.py`, `adapter_artifact_verifier.py` | No cryptographic signature enforcement at runtime |
-| AWS Load Balancer | AWS LBC install, IAM policy, service account, NLB verification | `scripts/aws-danger/04-install-load-balancer-controller.sh`, `05-deploy-gateway-full-stack.sh` | Controller policy should be reviewed and scoped per org |
-| Private networking | Private node default + verification script | `cluster-gpu.yaml`, `08-verify-private-networking.sh` | VPC endpoint and egress policy are evidence, not full landing zone |
-| Supply chain | Locked requirements, CI scans, SBOM workflow, container scan/signing reference | `requirements.lock`, `.github/workflows` | Base image digest pinning must be finalized by the deploying org |
-| Streaming SLOs | SSE proxy, TTFT metrics, stream token hints | `proxy.py`, `main.py`, `slo_metrics.py` | Decode tokens/sec and billing-grade stream usage not complete |
+| Mock auth guardrail | mock mode blocked outside local/dev/test/ci unless unsafe override is set | `config.py`, tests | does not make mock auth secure |
+| Tenant boundary | Host domain must match JWT tenant claim | `policy_engine.py`, tests | requires trusted ingress and non-bypassable upstream |
+| OIDC hardening | issuer/audience/signature, `exp`, `iat`, `nbf`, optional `token_use`, scopes, groups, JWKS cache | `jwt_validation.py`, `jwks_cache.py` | no enterprise IdP lifecycle or federation workflow |
+| Header spoofing defense | client routing headers stripped and trusted headers injected | `header_sanitizer.py`, tests | AIBrix must not be directly reachable |
+| Runtime quota | in-memory demo + Redis Lua reference backend | `quota_enforcer.py`, `scripts/aws-danger/09-create-redis-quota-backend.sh` | no full HA/failover, cost budget, or regional policy |
+| Billing ledger | JSONL + S3 Object Lock/DynamoDB reference | `billing_ledger.py`, `scripts/aws-danger/11-create-aws-native-billing-ledger.sh` | no reconciliation, invoicing, or dispute workflow |
+| Streaming | upstream status propagation, TTFT metrics, billing-required block | `proxy.py`, `main.py`, `slo_metrics.py` | no billing-grade streaming usage extraction |
+| Adapter governance | allowlist + catalog + SHA verification utility + evidence gate | `adapter_governance.py`, `adapter_artifact_verifier.py` | no cryptographic signature enforcement at runtime |
+| AWS Load Balancer | AWS LBC install, IAM policy, service account, NLB verification | `scripts/aws-danger/04-install-load-balancer-controller.sh`, `05-deploy-gateway-full-stack.sh` | org-specific IAM and SG review still required |
+| Pod AWS identity | Pod Identity/IRSA bootstrap for gateway AWS API access | `scripts/aws-danger/12-bootstrap-gateway-pod-identity.sh` | must be reviewed against org IAM boundaries |
+| Private networking | private node default + verification script | `cluster-gpu.yaml`, `08-verify-private-networking.sh` | not a full VPC endpoint/egress landing zone |
+| Supply chain | locked requirements, CI scans, SBOM workflow, container scan/signing reference | `requirements.lock`, `.github/workflows` | deploying org must enforce digest pinning/signature admission |
+| Runtime isolation | isolation intent in tenant config and headers | `tenant_registry.py`, tenant YAML | no KV-cache/batching proof |

@@ -1,92 +1,46 @@
-# Remaining Gaps After the AWS Full-Stack Danger Zone
+# 12 — Remaining Gaps After the Advanced AWS GPU Path
 
-The danger-zone path is runnable infrastructure scaffolding, not a production guarantee.
+The advanced AWS GPU path is runnable scaffolding, not a production guarantee. It is valuable because it exercises real AWS and AIBrix/vLLM components, but it does not prove that the system is safe, scalable, isolated, or cost-controlled under real tenant load.
 
-## Auth
+## AWS platform gaps
 
-Implemented:
+- No complete AWS landing zone.
+- No AWS Organizations/SCP design.
+- No full VPC endpoint and egress-lockdown implementation.
+- No WAF/Shield/TLS/certificate lifecycle.
+- No centralized GuardDuty/Security Hub/SIEM integration.
+- No disaster recovery plan.
 
-- Cognito user pool.
-- OIDC issuer and JWKS URL.
-- Tenant claim validation using `custom:tenant_id`.
-- `custom:tenant_id` created immutable for the demo pool.
-- App client `WriteAttributes` excludes `custom:tenant_id`.
-- Existing mutable tenant-claim pools fail closed.
+## Identity gaps
 
-Still missing:
+- Cognito is used as a reference IdP, not enterprise federation.
+- ID token vs access token API authorization must be decided by the deploying organization.
+- Tenant claim lifecycle and ownership process are outside the repo.
+- MFA, conditional access, and revocation playbooks are outside the repo.
 
-- Enterprise federation.
-- Conditional access policy.
-- JWKS cache hardening and rotation tests.
-- Automated IdP lifecycle management.
-- Scope/role/entitlement enforcement beyond tenant claim.
+## LLMOps runtime gaps
 
-## GPU and model serving
+- KV-cache isolation is not proven.
+- No GPU noisy-neighbor load test is included.
+- No Karpenter GPU autoscaling loop is included.
+- Model registry is not yet the runtime source of truth.
+- Model cache strategy is only a reference.
+- TTFT metrics exist, but queue time, prefill latency, decode latency, and tokens/sec are not complete.
 
-Implemented:
+## Billing and quota gaps
 
-- GPU node group.
-- NVIDIA device plugin install as a fail-fast step unless explicitly skipped.
-- vLLM GPU Deployment with AIBrix labels.
-- AIBrix stable manifest install.
+- Redis quota is a reference implementation, not a full commercial quota platform.
+- AWS-native billing evidence is not invoice reconciliation.
+- Streaming is blocked in billing-required modes rather than fully accounted.
+- Output-token quota and cost-budget enforcement remain incomplete.
 
-Still missing:
+## Adapter governance gaps
 
-- GPU capacity planning.
-- Karpenter GPU node pools.
-- Model warm cache by default; optional PVC cache mode is available but not provisioned automatically.
-- Multi-replica load tests.
-- TTFT and queue-depth autoscaling loop.
-- Verified KV-cache isolation.
+- SHA256 verification is useful, but not full artifact trust.
+- Cryptographic signature enforcement is not complete.
+- No admission-controller policy blocks unverified runtime artifacts.
+- No quarantine workflow or signed release lifecycle is included.
 
-## Model registry and LoRA artifacts
+## Final assessment
 
-Implemented:
-
-- S3 model registry bucket.
-- S3 LoRA artifact bucket.
-- Tenant registry references to adapter artifact URIs.
-
-Still missing:
-
-- Real adapter upload pipeline.
-- SHA verification against downloaded artifacts.
-- KMS signature verification.
-- Security scanning.
-- Rollback and lifecycle workflows.
-
-## Networking
-
-Implemented:
-
-- Tenant gateway calls an internal Kubernetes DNS name for AIBrix Envoy.
-- The full-stack gateway LoadBalancer defaults to internal.
-- GPU node groups default to private networking.
-- Service annotations include NLB type/scheme and legacy internal-LB fallback.
-
-Still missing:
-
-- Fully private EKS control plane and complete VPC endpoint set.
-- VPC endpoint set.
-- mTLS between gateway and AIBrix.
-- Service mesh policy validation.
-- Egress controls for Hugging Face/model downloads.
-
-## Billing and audit
-
-Implemented:
-
-- Structured gateway audit/metering events.
-- Reference ledger mode still available.
-
-Still missing:
-
-- Durable central ledger.
-- Reconciliation job.
-- Immutable audit storage.
-- SIEM export.
-- Usage-based invoice pipeline.
-
-## Self-roast
-
-An enterprise reviewer could still reject this because it proves deployment wiring, not operational maturity. The danger-zone path is valuable because it can run real components, but it does not prove that those components are safe, scalable, isolated, or cost-controlled under real tenant load.
+An enterprise reviewer could still reject this as a production platform. That is expected. The value of the advanced path is that it makes the hard parts visible and gives reviewers a concrete lab to test and criticize.

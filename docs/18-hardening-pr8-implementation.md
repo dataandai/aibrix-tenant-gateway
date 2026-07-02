@@ -1,6 +1,6 @@
-# Hardening PR-8 Implementation Notes
+# 18 — Hardening PR8 Implementation Notes
 
-This change set implements the requested audit remediation backlog:
+PR8 added the first major audit-remediation layer:
 
 1. AWS Load Balancer Controller + IAM/IRSA install + NLB verification.
 2. Redis/ElastiCache quota backend reference and full-stack refusal of in-memory quota.
@@ -11,7 +11,9 @@ This change set implements the requested audit remediation backlog:
 7. Adapter artifact verification utility.
 8. AWS-native S3 Object Lock billing ledger reference.
 
-## Full-stack order
+PR9 then tightened several runtime integration gaps. See [PR9 Audit Remediation Notes](19-pr9-audit-remediation.md).
+
+## Current advanced path order
 
 ```bash
 make aws-danger-create-gpu-cluster
@@ -20,8 +22,8 @@ make aws-danger-artifacts
 make aws-danger-install-lbc
 make aws-danger-install-aibrix
 make aws-danger-redis-quota
-make aws-danger-billing-ledger # S3 Object Lock + DynamoDB idempotency reference
-make aws-danger-pod-identity   # required for gateway S3/DynamoDB writes
+make aws-danger-billing-ledger
+make aws-danger-pod-identity
 make aws-danger-verify-adapters
 make aws-danger-deploy
 make aws-danger-verify-private
@@ -30,7 +32,4 @@ make aws-danger-smoke
 
 ## Remaining hard truth
 
-These are real improvements, not proof of an enterprise platform. The deepest remaining engineering work is runtime isolation proof, streaming usage accounting, adapter signature enforcement, and complete AWS landing zone controls.
-
-
-See also [PR9 Audit Remediation Notes](19-pr9-audit-remediation.md).
+These are real improvements, not proof of an enterprise platform. The deepest remaining work is runtime isolation proof, streaming usage accounting, cryptographic adapter signature enforcement, complete AWS landing zone controls, and live GPU load-test evidence.

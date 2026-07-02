@@ -1,6 +1,6 @@
 # 03 — Tenant Isolation Modes
 
-This repo demonstrates policy-based request isolation. Production systems may combine multiple modes.
+This repository demonstrates policy-based tenant governance. It does not claim that a single shared runtime is always safe. Real systems should choose an isolation mode based on tenant risk, compliance needs, cost, and operational maturity.
 
 ## Mode 1 — Shared gateway, shared model pool
 
@@ -8,24 +8,24 @@ This repo demonstrates policy-based request isolation. Production systems may co
 Tenant domains -> shared Tenant Policy Gateway -> shared AIBrix/vLLM pool
 ```
 
-Useful for demos and lower-sensitivity workloads.
+Useful for demos, internal tools, and lower-sensitivity workloads.
 
 Weaknesses:
 
 - noisy-neighbor risk,
 - shared runtime blast radius,
-- KV-cache isolation must be understood and validated separately,
-- policy correctness becomes critical.
+- KV-cache and batching behavior must be validated separately,
+- policy correctness becomes a critical control.
 
-## Mode 2 — Shared gateway, tenant-segmented model pools
+## Mode 2 — Shared gateway, segmented model pools
 
 ```text
-Tenant domains -> shared Tenant Policy Gateway -> tenant/profile-specific AIBrix pools
+Tenant domains -> shared Tenant Policy Gateway -> tier/tenant-specific AIBrix pools
 ```
 
-The gateway can inject `external-filter` and `config-profile` so downstream routing chooses a tenant or tier-specific pool.
+The gateway injects trusted routing metadata such as `external-filter` and `config-profile`. AIBrix or the downstream scheduler can use that metadata to select a pool.
 
-This is closer to production but still depends on downstream enforcement and scheduler behavior.
+This is closer to production, but only if the downstream routing layer enforces the intended separation and the upstream service is not directly reachable.
 
 ## Mode 3 — Tenant-dedicated namespaces and serving pools
 
@@ -34,18 +34,27 @@ Tenant A domain -> gateway -> tenant-a namespace/service
 Tenant B domain -> gateway -> tenant-b namespace/service
 ```
 
-Stronger operational isolation. Kubernetes namespaces, NetworkPolicies, ResourceQuotas, and node-pool constraints can reduce blast radius.
+This reduces blast radius through Kubernetes namespaces, NetworkPolicies, ResourceQuotas, service accounts, and node selectors/taints.
 
-Still not enough alone for strict regulated isolation unless combined with identity, network, storage, runtime, and audit controls.
+It is still not sufficient for strict regulated isolation unless combined with identity, network, storage, runtime, audit, and artifact controls.
 
-## Mode 4 — Dedicated cluster/account per tenant
+## Mode 4 — Dedicated cluster or AWS account per tenant
 
-Highest isolation, highest cost and operational overhead.
+Highest isolation and highest cost. Appropriate when tenants require separate change windows, dedicated GPU capacity, strict compliance boundaries, isolated logging, or account-level controls.
 
-Useful when tenants require strict compliance boundaries, dedicated GPU capacity, isolated logging, independent change windows, or separate AWS accounts.
+## Where this repo sits
 
-## MVP position
+- Local and CPU-only AWS demo paths are closest to Mode 1.
+- The advanced AWS GPU path demonstrates pieces of Mode 2.
+- The Kubernetes examples point toward Mode 3.
+- Mode 4 is discussed only as a production design option.
 
-The MVP primarily demonstrates Mode 1 with examples that point toward Mode 2 and Mode 3. It does not implement hard multi-tenant runtime isolation.
+## Required production decision
 
-For production review, the team must explicitly decide whether shared model pools are acceptable, whether LoRA adapters can coexist in the same runtime, and whether KV-cache/batching behavior is safe for the tenant risk profile.
+Before using a shared model pool, the platform owner must explicitly decide:
+
+- whether tenants can share a vLLM runtime,
+- whether LoRA adapters can coexist in one serving pool,
+- how KV-cache and batching behavior are isolated or constrained,
+- what evidence proves noisy-neighbor and data-boundary safety,
+- which tenants require dedicated pools, nodes, clusters, or accounts.

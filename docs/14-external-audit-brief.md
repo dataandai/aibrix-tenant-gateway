@@ -1,33 +1,43 @@
-# External Audit Brief
+# 14 — External Audit Brief
 
-This document is the evidence pack entry point for AWS-certified security, authorization, and LLMOps reviewers.
+This page is written for external reviewers. The correct assessment target is a reference lab, not a production SaaS platform.
 
-## Audit posture
+## System under review
 
-The repository has two AWS paths:
+1. **Local demo**: mock auth and mock upstream.
+2. **CPU-only AWS demo**: EKS, ECR, LoadBalancer, mock upstream.
+3. **Advanced AWS GPU full-stack path**: GPU EKS, AWS Load Balancer Controller, Cognito OIDC, Redis/ElastiCache quota reference, AIBrix/vLLM, S3 artifact buckets, S3/DynamoDB billing reference, Pod Identity/IRSA, and private networking evidence.
 
-1. **Cheap AWS demo**: CPU-only, mock auth, mock upstream, low-friction reviewer demo.
-2. **AWS Full-Stack DANGER ZONE**: GPU EKS, Cognito OIDC, Redis/ElastiCache quota reference, AIBrix/vLLM, internal NLB, S3 artifact buckets, AWS-native billing reference.
+The Makefile target prefix `aws-danger-*` marks the advanced path as cost-bearing and quota-dependent.
 
-The full-stack path is still not a production-certified SaaS LLM platform. It is a deployable reference implementation with explicit warnings and guardrails.
+## Implemented controls to review
 
-## Implemented hardening after external-audit simulation
+- Tenant resolution from Host domain.
+- OIDC/JWT tenant claim matching.
+- Header stripping and trusted header injection.
+- Model and LoRA adapter allowlists.
+- OIDC hardening controls.
+- Redis quota reference.
+- Streaming billing gate and TTFT metrics.
+- AWS-native billing reference with S3 Object Lock and DynamoDB idempotency.
+- Pod Identity/IRSA reference path.
+- Adapter verification evidence gate.
+- NetworkPolicy and private networking evidence scripts.
 
-- AWS Load Balancer Controller bootstrap with IAM policy and service account binding.
-- NLB scheme verification after gateway deployment.
-- Redis/ElastiCache reference quota backend; full-stack deploy refuses in-memory quota.
-- OIDC claim hardening: `token_use`, `nbf`, leeway, scopes, groups, and JWKS client cache.
-- Supply-chain reference controls: pinned requirements, SBOM workflow, Trivy workflow, container workflow, Cosign signing note.
-- Private networking evidence script: node ExternalIP check, NLB scheme check, VPC endpoint inventory.
-- Streaming proxy path with TTFT metrics and stream token hints.
-- Adapter artifact SHA256 verifier for local and S3 artifacts.
-- AWS-native billing reference using S3 Object Lock bucket and per-request ledger objects.
+## Explicit non-claims
 
-## What auditors should not accept as solved
+- Not production-certified.
+- Not billing-grade for all modes.
+- Not a full AWS landing zone.
+- Not proof of KV-cache isolation.
+- Not complete adapter supply-chain enforcement.
+- Not a managed service.
 
-- KV-cache isolation is not proven.
-- Adapter signature verification is metadata-only unless extended with KMS/cosign.
-- Redis quota is reference-grade; production needs operational HA, alerts, and failure policy.
-- S3 Object Lock billing is a reference ledger, not a full reconciliation platform.
-- Private networking evidence is a script, not a complete enterprise landing zone proof.
-- The full-stack path requires AWS quota, manual environment choices, and destructive cleanup discipline.
+## Desired audit output
+
+Please classify findings as:
+
+- implemented reference control,
+- runtime integration risk,
+- production blocker,
+- documentation/positioning issue.

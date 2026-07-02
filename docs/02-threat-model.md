@@ -3,28 +3,46 @@
 ## Assets
 
 - Tenant identity and routing context.
-- Model access policy.
-- LoRA adapter access policy.
-- Request/audit/metering events.
+- OIDC/JWT claims used for tenant decisions.
+- Model and LoRA adapter access policy.
+- Billing, audit, quota, and metering events.
 - AIBrix/vLLM serving capacity.
-- Tenant-specific data in prompts and responses.
+- Tenant prompt and response data.
+- Model and adapter artifacts.
 
 ## Trust boundaries
 
 ```text
-Public client       untrusted
-Ingress/Gateway     semi-trusted infrastructure boundary
-Tenant Gateway      policy enforcement point
-AIBrix/vLLM         serving substrate, not SaaS auth boundary
-Model/runtime       compute/data processing layer
+Public client            untrusted
+DNS / NLB / ingress       infrastructure boundary, not app auth
+Tenant Policy Gateway     policy enforcement point
+AIBrix / Envoy / vLLM     serving substrate, not SaaS auth boundary
+Model runtime / GPU       compute boundary requiring separate validation
+AWS services              trusted only through scoped IAM and network controls
 ```
+
+## Primary threat scenarios
+
+| Threat | Reference control | Remaining production concern |
+|---|---|---|
+| Cross-tenant token use | Host tenant must match JWT tenant claim | IdP lifecycle and tenant claim source of truth remain external |
+| Header spoofing | Client routing headers are stripped; trusted headers are regenerated | Direct-to-AIBrix bypass must be prevented by network/service controls |
+| Unauthorized model use | tenant/model allowlist | Model registry as source of truth is still reference-only |
+| Unauthorized LoRA adapter | tenant/model adapter allowlist + catalog checks | Runtime artifact signature enforcement is not complete |
+| Quota abuse | local demo quota or Redis reference quota | HA/failover, regional consistency, and cost budgets remain out of scope |
+| Billing bypass | ledger-required and AWS-native reference modes | streaming usage is blocked, not fully solved |
+| AWS credential misuse | Pod Identity/IRSA reference path | IAM policy must be reviewed and scoped by deploying org |
+| Public upstream bypass | private upstream expectation and NetworkPolicy examples | full VPC endpoint/egress proof is not included |
 
 ## Implemented controls
 
 ### Mock-auth environment guardrail
 
-`APP_AUTH_MODE=mock` is rejected outside `local`, `dev`, `development`, `test`, and `ci` unless an explicitly unsafe override is set. This is a guardrail against accidental demos becoming production incidents. It does not make mock auth secure.
+`APP_AUTH_MODE=mock` is rejected outside `local`, `dev`, `development`, `test`, and `ci` unless an explicitly unsafe override is set. This prevents accidental use of mock auth in production-like deployments. It does not make mock auth secure.
 
+### OIDC/JWKS validation
+
+OIDC mode validates issuer, audience, signature, temporal claims, tenant claim, and optional `token_use`, scope, and group requirements. JWKS clients are cached with TTL. This is a reference IdP integration, not a complete enterprise identity lifecycle.
 
 ### Header stripping
 
@@ -40,79 +58,35 @@ The gateway strips client-supplied routing headers before forwarding:
 - `x-internal-user-id`
 - `x-internal-slo-tier`
 
-This prevents client-provided routing hints from influencing policy or AIBrix-facing headers. A valid request with spoofed routing headers may still be allowed, but the spoofed values are stripped and ignored.
+A valid request with spoofed routing headers may still be allowed, but the spoofed values are ignored and removed.
 
-### Domain + tenant claim match
+### Quota and billing fail-closed hooks
 
-A request must satisfy both:
+The advanced path can use Redis-backed quota enforcement and AWS-native reference billing. Streaming is denied in billing-required modes unless an explicit unsafe override is set.
 
-- `Host` resolves to tenant X,
-- JWT tenant claim says tenant X.
+### Adapter verification evidence
 
-If either side disagrees, the request is denied.
-
-### Model and adapter allowlists
-
-The request body must use a model allowed for the tenant. If a LoRA adapter is requested, it must be allowed for that tenant/model pair.
-
-### Fail closed
-
-If the tenant registry cannot be loaded, inference endpoints return `503 registry_unavailable`.
+The repository includes an adapter artifact verifier and a deploy-time evidence gate for the advanced AWS path. It verifies SHA256 for reference artifacts, but cryptographic signature enforcement remains a production gap.
 
 ## What is not a security boundary
 
 - Header-based AIBrix routing is not a security boundary.
 - Kubernetes namespaces alone are not a complete tenant isolation strategy.
 - Mock JWT mode is not authentication.
-- Approximate token metering is not a billing ledger.
-- LoRA allowlists are not complete adapter governance.
-- This MVP does not prove KV-cache isolation.
+- Approximate token estimates are not billing-grade usage records.
+- A LoRA allowlist is not complete adapter supply-chain governance.
+- The gateway cannot prove vLLM/AIBrix KV-cache isolation.
+- The advanced AWS path is not an enterprise landing zone.
 
 ## Production hardening checklist
 
-- Use real OIDC/JWKS validation with issuer-specific configuration.
-- Disable mock auth in all non-local environments.
-- Add mTLS or trusted service identity between ingress, gateway, and AIBrix where appropriate.
-- Ensure upstream AIBrix is not publicly reachable.
-- Add egress restrictions and NetworkPolicies.
-- Add runtime rate limiting and quota enforcement.
-- Add tenant-specific audit retention and SIEM integration.
-- Add adapter artifact signing/scanning/approval workflows.
-- Add load tests and noisy-neighbor tests.
-- Prove or explicitly constrain vLLM/AIBrix KV-cache and batching behavior under multi-tenant workloads.
-- Add durable billing ledger and quota enforcement before charging customers.
-
-## Additional controls added after roast
-
-### Security posture enforcement
-
-The app can run in `APP_SECURITY_POSTURE_MODE=enforce`. In that mode, critical/high
-findings block readiness and request handling. Example findings include mock upstream
-in production-like environments, disabled quota, disabled billing, disabled audit,
-and an upstream URL that does not look private/internal.
-
-This is a guardrail, not a formal compliance engine.
-
-### Runtime quota abuse
-
-The repo now includes an in-memory quota enforcer for request and input-token windows.
-This mitigates abuse only inside one process. A multi-replica production deployment
-needs a distributed quota backend.
-
-### Adapter supply-chain abuse
-
-`catalog_enforced` mode requires adapter metadata: active status, checksum, signer,
-and compatible model list. This reduces accidental adapter misuse, but it does not
-verify the downloaded artifact cryptographically.
-
-### Billing bypass
-
-`ledger_required` mode blocks successful responses if upstream usage fields are absent
-or inconsistent. This prevents silent serving without usage records in the reference
-flow, but the JSONL ledger is not tamper-proof or invoice-grade.
-
-### Direct-to-AIBrix bypass
-
-The core threat remains: if an attacker can reach AIBrix/vLLM directly, the gateway
-policy can be bypassed. NetworkPolicy, private Services, service identity, and mTLS
-must be enforced outside this FastAPI process.
+- Use real OIDC/JWKS validation with organization-approved issuer configuration.
+- Define whether API authorization uses ID tokens, access tokens, or a service-to-service flow.
+- Ensure tenant claims cannot be user-mutated.
+- Restrict direct access to AIBrix/vLLM.
+- Add service identity or mTLS between trusted components.
+- Replace broad HTTPS egress with FQDN policy, VPC endpoints, or egress proxy controls.
+- Use distributed quota with tested failure-mode behavior.
+- Add billing reconciliation and immutable audit retention.
+- Enforce model/adapter artifacts with signature verification and admission controls.
+- Prove runtime isolation, batching, KV-cache behavior, and noisy-neighbor handling under load.

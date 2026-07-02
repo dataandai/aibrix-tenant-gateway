@@ -1,6 +1,6 @@
-# PR9 Audit Remediation Notes
+# 19 — PR9 Audit Remediation Notes
 
-This change set addresses the second external-audit pass. It does not certify the project as production-ready. It turns several previously "implemented-looking" controls into runnable reference controls with explicit guardrails.
+PR9 addresses the second external-audit pass. It does not certify the project as production-ready. It turns several previously “implemented-looking” controls into runnable reference controls with explicit guardrails.
 
 ## PR9-1: NetworkPolicy, Pod Identity, AWS egress
 
@@ -19,7 +19,7 @@ Caveat: standard Kubernetes NetworkPolicy cannot express FQDN egress. For strict
 Implemented:
 
 - `stream=true` is denied when `APP_BILLING_MODE=ledger_required` or `aws_native_reference`, unless `APP_ALLOW_STREAMING_WITHOUT_BILLING_USAGE=true` is explicitly set.
-- streaming proxy now opens the upstream stream before constructing the downstream `StreamingResponse`, so upstream 4xx/5xx status can propagate instead of being masked as HTTP 200.
+- The streaming proxy opens the upstream stream before constructing the downstream `StreamingResponse`, so upstream 4xx/5xx status can propagate instead of being masked as HTTP 200.
 
 Caveat: streaming usage extraction is still not billing-grade. The safe default is to block streaming in billing-required modes.
 
@@ -27,13 +27,13 @@ Caveat: streaming usage extraction is still not billing-grade. The safe default 
 
 Implemented:
 
-- Redis quota now uses Lua scripts for atomic check-and-record.
-- user-level and tenant-level request counters
-- user-level and tenant-level input-token counters
-- user-level and tenant-level concurrency counters
-- `finish_request()` decrements concurrency on normal and streaming completion paths
+- Redis quota uses Lua scripts for atomic check-and-record.
+- User-level and tenant-level request counters.
+- User-level and tenant-level input-token counters.
+- User-level and tenant-level concurrency counters.
+- `finish_request()` decrements concurrency on normal and streaming completion paths.
 
-Caveat: output-token quota and cost-budget enforcement are still not implemented. Regional Redis replication and failure-mode policy are still out of scope.
+Caveat: output-token quota and cost-budget enforcement are not implemented. Regional Redis replication and failure-mode policy are out of scope.
 
 ## PR9-4: AWS-native billing via boto3 + DynamoDB idempotency
 
@@ -42,7 +42,7 @@ Implemented:
 - AWS-native ledger no longer shells out to the AWS CLI.
 - boto3 writes one object per request into the S3 Object Lock bucket.
 - optional DynamoDB table provides request-id idempotency with conditional `PutItem` and completion update.
-- `scripts/aws-danger/11-create-aws-native-billing-ledger.sh` now creates the DynamoDB idempotency table.
+- `scripts/aws-danger/11-create-aws-native-billing-ledger.sh` creates the DynamoDB idempotency table.
 
 Caveat: this is still a reference billing ledger. It is not a complete reconciliation, invoicing, dispute, or financial-control system.
 
@@ -50,7 +50,7 @@ Caveat: this is still a reference billing ledger. It is not a complete reconcili
 
 Implemented:
 
-- adapter verifier now supports `python -m tenant_policy_gateway.adapter_artifact_verifier`
+- adapter verifier supports `python -m tenant_policy_gateway.adapter_artifact_verifier`
 - S3 verification uses boto3 instead of AWS CLI
 - `scripts/aws-danger/10-verify-adapter-artifacts.sh` writes `.aws-danger-adapter-verification.env` evidence
 - full-stack deploy refuses to continue if adapter verification evidence is missing and enforcement is required
@@ -58,28 +58,11 @@ Implemented:
 
 Caveat: cryptographic signature verification is still metadata-only. A production implementation should add KMS/cosign verification, admission-control enforcement, and artifact quarantine workflows.
 
-## Updated full-stack order
-
-```bash
-make aws-danger-create-gpu-cluster
-make aws-danger-oidc
-make aws-danger-artifacts
-make aws-danger-install-lbc
-make aws-danger-install-aibrix
-make aws-danger-redis-quota
-make aws-danger-billing-ledger
-make aws-danger-pod-identity
-make aws-danger-verify-adapters
-make aws-danger-deploy
-make aws-danger-verify-private
-make aws-danger-smoke
-```
-
 ## Remaining blockers
 
 - KV-cache isolation is still not proven.
-- streaming usage accounting is intentionally blocked in billing-required modes rather than solved.
-- adapter signature verification is still not cryptographic.
-- standard NetworkPolicy still cannot enforce domain-level egress.
-- no GPU noisy-neighbor/load-test evidence is included.
-- no full enterprise AWS landing zone is included.
+- Streaming usage accounting is intentionally blocked in billing-required modes rather than solved.
+- Adapter signature verification is still not cryptographic.
+- Standard NetworkPolicy still cannot enforce domain-level egress.
+- No GPU noisy-neighbor/load-test evidence is included.
+- No full enterprise AWS landing zone is included.

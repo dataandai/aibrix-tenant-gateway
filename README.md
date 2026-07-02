@@ -1,31 +1,216 @@
 # aibrix-multitenant-llm-gateway
 
-A production-inspired **reference architecture** for OAuth2/OIDC-based multi-tenant, multi-domain LLM serving on Kubernetes with AIBrix/vLLM as the serving substrate.
+**Audit-hardened AWS/EKS reference lab for tenant-governed LLM serving in front of AIBrix/vLLM.**
 
-This repository demonstrates a small SaaS governance layer in front of AIBrix/vLLM. It is useful for learning and architecture review, but it is intentionally **not a production platform**.
+This repository shows how to place a SaaS governance layer in front of an LLM serving substrate. It uses a FastAPI **Tenant Policy Gateway** to validate tenant identity, enforce model and LoRA policy, strip spoofable routing headers, inject trusted internal routing metadata, emit audit/metering events, and forward allowed traffic to AIBrix/vLLM.
 
+This is **not** a production-certified SaaS LLM platform. It is a deployable reference lab for engineers who want to understand the hard parts of multi-tenant LLM serving on Kubernetes and AWS EKS.
 
+---
 
-## Latest audit-hardening additions
+## The short version
 
-The AWS full-stack DANGER ZONE path now includes an optional audit-remediation layer:
+AIBrix/vLLM is treated as the **serving substrate**, not as the security or SaaS governance boundary.
 
-```bash
-make aws-danger-install-lbc        # AWS Load Balancer Controller + IAM/IRSA reference install
-make aws-danger-redis-quota        # Redis/ElastiCache quota backend reference
-make aws-danger-billing-ledger     # S3 Object Lock + DynamoDB idempotency reference
-make aws-danger-pod-identity       # Gateway Pod Identity for S3/DynamoDB writes
-make aws-danger-verify-adapters    # SHA256 adapter artifact verification evidence
-make aws-danger-verify-private     # node ExternalIP + NLB scheme + VPC endpoint evidence
+The gateway sits before AIBrix and handles:
+
+- tenant resolution from the request domain,
+- OIDC/JWT validation,
+- tenant claim and Host-domain matching,
+- allowed model checks,
+- allowed LoRA adapter checks,
+- spoofed routing-header stripping,
+- trusted header injection for AIBrix routing,
+- Redis quota enforcement reference,
+- audit and metering events,
+- billing ledger reference hooks,
+- streaming proxy with TTFT metrics,
+- Kubernetes and AWS EKS deployment examples.
+
+The repository has **three run modes**:
+
+| Path | What it is | Needs GPU? | Uses real AIBrix/vLLM? | Best for |
+|---|---|---:|---:|---|
+| Local demo | Runs the gateway on your machine with mock auth and mock upstream | No | No | Quick code review and tests |
+| Cheap AWS demo | CPU-only EKS deployment with mock auth and mock upstream | No | No | Reviewer-friendly AWS smoke test |
+| Advanced GPU full-stack path | Expensive self-managed AWS/EKS lab with GPU, Cognito, AIBrix/vLLM, Redis, S3/DynamoDB references | Yes | Yes | Engineers who explicitly want to test the real infrastructure path |
+
+The Makefile still uses the prefix `aws-danger-*` for the advanced GPU path. **“Danger” is not a product name. It is a warning label.** It means: this path may create expensive AWS resources, requires GPU quota, and is expected to fail unless your AWS account and region are ready for GPU workloads.
+
+---
+
+## Architecture
+
+```mermaid
+flowchart TB
+    subgraph Clients["Clients / Tenants"]
+        TA["Tenant A client<br/>tenant-a.example.local"]
+        TB["Tenant B client<br/>tenant-b.example.local"]
+        BAD["Spoofed or cross-tenant request"]
+    end
+
+    subgraph Edge["AWS / Kubernetes edge"]
+        DNS["Route 53 or local Host mapping"]
+        NLB["AWS NLB<br/>internal by default in advanced path"]
+        LBC["AWS Load Balancer Controller<br/>IAM / Pod Identity reference"]
+    end
+
+    subgraph Gateway["Tenant Policy Gateway - FastAPI"]
+        HS["Header sanitizer<br/>strips spoofable routing headers"]
+        AUTH["OIDC / JWT validation<br/>issuer, audience, token_use, tenant claim"]
+        POLICY["Policy engine<br/>tenant, model, LoRA checks"]
+        QUOTA["Quota enforcement<br/>Redis reference backend"]
+        PROXY["Trusted proxy<br/>streaming + TTFT metrics"]
+        AUDIT["Metering / audit<br/>JSON events"]
+        BILLING["Billing reference<br/>S3 Object Lock + DynamoDB idempotency"]
+    end
+
+    subgraph Identity["Identity and policy sources"]
+        COG["Amazon Cognito / OIDC provider"]
+        JWKS["JWKS cache"]
+        REG["Tenant registry<br/>YAML / ConfigMap"]
+    end
+
+    subgraph Governance["Governance backends"]
+        REDIS["Redis / ElastiCache<br/>quota counters"]
+        S3B["S3 Object Lock<br/>billing ledger reference"]
+        DDB["DynamoDB<br/>idempotency table"]
+        S3A["S3 model / LoRA artifacts"]
+        VERIFY["Adapter verification<br/>SHA256 evidence gate"]
+    end
+
+    subgraph Serving["AIBrix / vLLM serving substrate"]
+        ENVGW["Envoy Gateway / AIBrix gateway"]
+        ROUTER["AIBrix routing<br/>external-filter, config-profile"]
+        VLLM["vLLM GPU model pool"]
+        LORA["LoRA adapter loading"]
+    end
+
+    TA --> DNS --> NLB --> HS
+    TB --> DNS
+    BAD --> DNS
+    LBC -. manages .-> NLB
+
+    HS --> AUTH --> JWKS --> COG
+    AUTH --> POLICY --> REG
+    POLICY --> QUOTA --> REDIS
+    POLICY --> VERIFY --> S3A
+    POLICY --> PROXY --> ENVGW --> ROUTER --> VLLM
+    ROUTER --> LORA
+
+    PROXY --> BILLING --> S3B
+    BILLING --> DDB
+
+    HS --> AUDIT
+    AUTH --> AUDIT
+    POLICY --> AUDIT
+    QUOTA --> AUDIT
+    PROXY --> AUDIT
+    BILLING --> AUDIT
+
+    BAD -. spoofed headers stripped and ignored .-> HS
+    PROXY -. injects trusted headers .-> ENVGW
 ```
 
-The gateway also includes OIDC claim hardening, JWKS client caching, streaming/SSE forwarding with TTFT metrics, Redis Lua quota checks, boto3-based AWS billing writes, supply-chain CI examples, and an external-audit evidence pack in `docs/14-*` through `docs/19-*`. These controls improve the reference implementation but still do not make it a production-certified SaaS LLM platform.
+---
 
-## AWS demo: deployable reviewer environment
+## What problem does this solve?
 
-This repository now includes a short-lived AWS/EKS demo path for reviewers who want to actually run the gateway outside localhost.
+High-throughput LLM serving stacks such as AIBrix/vLLM are good at model serving, scheduling, routing, and GPU utilization. They are not, by themselves, a complete SaaS governance layer.
 
-The AWS demo creates a CPU-only EKS cluster, pushes the gateway image to ECR, deploys the Tenant Policy Gateway, exposes it through a public LoadBalancer Service, and runs smoke tests with tenant-aware Host headers.
+This repo demonstrates the layer that usually needs to exist **before** the serving substrate:
+
+```text
+Client
+  -> AWS/Kubernetes ingress
+  -> Tenant Policy Gateway
+  -> AIBrix / vLLM serving pool
+```
+
+The gateway makes the authorization and routing decision before the request reaches the LLM runtime.
+
+It answers questions such as:
+
+- Which tenant owns this domain?
+- Does the JWT claim match the resolved tenant?
+- Is this tenant allowed to use this model?
+- Is this tenant allowed to use this LoRA adapter with this model?
+- Did the client try to spoof internal routing headers?
+- What trusted routing headers should AIBrix receive?
+- What should be logged for audit, quota, latency, and billing reference?
+
+---
+
+## What this repo is not
+
+This repository is intentionally honest about its limits.
+
+It is **not**:
+
+- a production-certified SaaS LLM platform,
+- a complete AWS landing zone,
+- a billing-grade inference platform,
+- a proof of KV-cache tenant isolation,
+- a complete LoRA artifact governance product,
+- a managed AIBrix distribution,
+- a one-click enterprise deployment.
+
+It is a reference lab that makes the hard production gaps visible and gives you a concrete place to start.
+
+---
+
+## Path 1: Local demo
+
+Use this when you just want to inspect the code and run the policy gateway locally.
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+make test
+make run
+```
+
+In another terminal:
+
+```bash
+make demo-a
+make demo-b
+make demo-cross
+make demo-lora
+make demo-spoof
+```
+
+Local demo behavior:
+
+- uses mock auth,
+- uses mock upstream,
+- does not require AWS,
+- does not require AIBrix,
+- does not require GPU.
+
+Mock auth accepts tokens such as:
+
+```text
+Authorization: Bearer mock:tenant-a:user-123
+```
+
+Mock auth is blocked outside local/dev/test/ci unless explicitly overridden for a throwaway demo.
+
+---
+
+## Path 2: Cheap AWS demo
+
+Use this when you want to prove that the gateway can be built, pushed, deployed, exposed, smoke-tested, and destroyed on AWS EKS without GPU.
+
+This path creates:
+
+- a CPU-only EKS cluster,
+- an ECR repository,
+- a gateway image,
+- a Tenant Policy Gateway deployment,
+- a public LoadBalancer Service,
+- smoke tests using tenant-aware Host headers.
 
 ```bash
 export AWS_REGION=eu-west-1
@@ -37,34 +222,69 @@ make aws-deploy
 make aws-smoke
 ```
 
-Destroy the demo when finished:
+Destroy it when done:
 
 ```bash
 make aws-destroy
 ```
 
-The AWS demo uses mock auth and mock upstream intentionally so it can run without GPU quota, a real IdP, or a real AIBrix deployment. It is not production-secure. See [`docs/09-aws-demo-runbook.md`](docs/09-aws-demo-runbook.md) and [`docs/10-aws-production-path.md`](docs/10-aws-production-path.md).
+This path intentionally uses mock auth and mock upstream. It is the recommended path for reviewers because it is cheaper and easier to reproduce.
 
+Read more: [`docs/09-aws-demo-runbook.md`](docs/09-aws-demo-runbook.md)
 
+---
 
-## AWS full-stack Danger Zone: real GPU/AIBrix/vLLM/OIDC path
+## Path 3: Advanced GPU full-stack path
 
-The cheap AWS demo is still the recommended first path. For people who explicitly want the expensive, real-infrastructure path, the repo now includes a separate **Danger Zone** route.
+This is the path previously called **DANGER ZONE** in the repo scripts.
 
-This path attempts to create a GPU-backed EKS environment with Cognito OIDC, S3 model/LoRA artifact buckets, Envoy Gateway, AIBrix, a vLLM GPU model Deployment, and the Tenant Policy Gateway in OIDC mode with a private AIBrix upstream.
+The name exists for a reason: this path may create real AWS costs and can fail if your AWS account is not ready for GPU workloads.
 
-It is intentionally gated by an explicit consent variable:
+Use this path only if you explicitly want to test the full infrastructure direction:
+
+- GPU-backed EKS node group,
+- AWS Load Balancer Controller,
+- Cognito OIDC bootstrap,
+- S3 model and LoRA artifact buckets,
+- Redis / ElastiCache quota backend reference,
+- S3 Object Lock + DynamoDB billing ledger reference,
+- Gateway Pod Identity / IAM reference,
+- Envoy Gateway,
+- AIBrix installation,
+- vLLM GPU model deployment,
+- Tenant Policy Gateway in OIDC mode,
+- adapter verification evidence,
+- private-networking evidence checks.
+
+### Before running it
+
+You need:
+
+- AWS CLI configured,
+- `eksctl`, `kubectl`, `helm`, `docker`, and `jq`,
+- permission to create EKS, IAM, ECR, S3, DynamoDB, Cognito, Load Balancers, and optionally ElastiCache,
+- GPU quota in the target AWS region,
+- enough budget to pay for GPU/EKS/LB/storage/network resources,
+- patience for model download and AIBrix/vLLM startup.
+
+You must explicitly acknowledge the cost/quota risk:
 
 ```bash
 export I_UNDERSTAND_AWS_GPU_COST_AND_QUOTAS=yes
 ```
 
-Then the full path is:
+The example env file does **not** set this for you.
+
+### Run sequence
 
 ```bash
 cp infra/aws/full-stack/full-stack.env.example .aws-danger.env
-# Edit .aws-danger.env first: set COGNITO_TEST_PASSWORD and review GPU/model/network values.
+
+# Edit this file carefully.
+# Set COGNITO_TEST_PASSWORD.
+# Review region, GPU instance type, model, network, billing, and quota settings.
 vim .aws-danger.env
+
 source .aws-danger.env
 export I_UNDERSTAND_AWS_GPU_COST_AND_QUOTAS=yes
 
@@ -88,7 +308,7 @@ Destroy it when finished:
 make aws-danger-destroy
 ```
 
-To also remove optional persistent resources:
+Optional cleanup of persistent resources:
 
 ```bash
 DELETE_ECR_REPOSITORY=true \
@@ -97,111 +317,40 @@ DELETE_ARTIFACT_BUCKETS=true \
 make aws-danger-destroy
 ```
 
-This route can fail or become expensive if you lack GPU quota, the model does not fit, the region lacks capacity, Hugging Face access is missing, or upstream AIBrix manifests change. The consent flag is intentionally not enabled in the example env file, Cognito tenant claims are created immutable, generated secret files are git-ignored, and critical runtime installs now fail fast instead of silently continuing. See [`docs/11-aws-full-stack-danger-zone.md`](docs/11-aws-full-stack-danger-zone.md).
+### Why the Makefile target says `aws-danger-*`
 
-## What this repo solves
+The prefix is intentional. It marks the path as high-cost and high-friction.
 
-The MVP implements a FastAPI **Tenant Policy Gateway** between public ingress and AIBrix/vLLM.
+It does **not** mean the code is reckless. The advanced path includes guardrails:
 
-```text
-Client
-  -> Gateway API / Envoy Gateway / ALB-facing ingress
-  -> Tenant Policy Gateway
-  -> AIBrix Gateway / vLLM serving pool
-```
+- consent flag required,
+- generated secrets git-ignored,
+- Cognito tenant claim created immutable,
+- default Cognito password rejected,
+- AWS Load Balancer Controller install step,
+- Pod Identity / IAM reference step,
+- Redis quota reference step,
+- S3/DynamoDB billing reference step,
+- adapter verification evidence gate,
+- private networking evidence check,
+- critical installs fail fast instead of silently continuing.
 
-The gateway demonstrates:
+But it is still an experimental AWS lab, not a production deployment.
 
-- domain-aware tenant resolution from the HTTP `Host`,
-- JWT tenant claim validation against the resolved domain tenant,
-- tenant-specific model allowlists,
-- tenant/model-specific LoRA adapter allowlists,
-- mandatory stripping of spoofable client routing headers,
-- trusted header injection for AIBrix-facing routing metadata,
-- structured JSON request/metering events,
-- per-process reference quota enforcement,
-- optional adapter artifact catalog checks,
-- optional JSONL audit sink,
-- optional reference billing ledger mode,
-- security posture audit/enforce mode,
-- Prometheus-text `/metrics` endpoint,
-- Kubernetes and AWS EKS reference manifests.
+Read more:
 
-## What this repo does not solve
+- [`docs/11-aws-full-stack-danger-zone.md`](docs/11-aws-full-stack-danger-zone.md)
+- [`docs/12-danger-zone-production-gaps.md`](docs/12-danger-zone-production-gaps.md)
+- [`docs/13-danger-zone-audit-fixes.md`](docs/13-danger-zone-audit-fixes.md)
+- [`docs/19-pr9-audit-remediation.md`](docs/19-pr9-audit-remediation.md)
 
-This is not a billing, identity, runtime isolation, GPU capacity, or enterprise landing-zone product. It does not implement:
+---
 
-- complete billing-grade token accounting,
-- enterprise durable usage ledger or invoice reconciliation,
-- hard KV-cache isolation proof,
-- full LoRA artifact governance and artifact signing verification,
-- distributed runtime rate-limit or quota enforcement,
-- TTFT/queue-time/GPU-aware autoscaling loops,
-- enforced mTLS or service-mesh identity,
-- full AWS landing-zone controls,
-- complete AIBrix deployment automation for every topology, although a separate AWS full-stack Danger Zone path is included,
-- production OIDC discovery/key-rotation lifecycle.
+## Core security behavior
 
-See [`docs/05-limitations.md`](docs/05-limitations.md), [`docs/06-roast-review.md`](docs/06-roast-review.md), and [`docs/07-production-hardening-implementation-plan.md`](docs/07-production-hardening-implementation-plan.md).
+### Header stripping
 
-## Why AIBrix is treated as serving substrate, not auth boundary
-
-AIBrix/vLLM is treated here as the LLM serving substrate: model serving, adapter routing, request scheduling, and runtime integration live behind the gateway.
-
-The gateway does **not** assume AIBrix is the SaaS authorization boundary. Public identity, tenant policy, model allowlists, LoRA adapter allowlists, and routing header construction happen before requests reach AIBrix.
-
-If clients or untrusted workloads can reach AIBrix directly, they can bypass this gateway. In production, AIBrix-facing services must be private and reachable only through trusted paths.
-
-## Domain-aware routing
-
-Each tenant has one or more domains in YAML config:
-
-```yaml
-tenants:
-  - tenant_id: tenant-a
-    domains:
-      - tenant-a.example.local
-```
-
-At request time:
-
-- `Host: tenant-a.example.local` resolves to `tenant-a`.
-- The JWT tenant claim must also be `tenant-a`.
-- A token for `tenant-a` sent to `tenant-b.example.local` is denied.
-
-This prevents cross-domain tenant replay at the policy gateway.
-
-## Trusted header injection
-
-After a policy allow decision, the gateway injects AIBrix-facing headers:
-
-```text
-user: tenant-a:user-123
-external-filter: tenant=tenant-a
-config-profile: gold
-x-internal-tenant-id: tenant-a
-x-internal-user-id: user-123
-```
-
-These values are derived from:
-
-- tenant registry,
-- resolved host,
-- validated JWT claims,
-- policy engine decision.
-
-They are **not** accepted from public clients.
-
-## Why header stripping is mandatory
-
-Headers such as `user`, `external-filter`, and `config-profile` are often used by gateways and serving stacks for routing, filtering, scheduling, or observability. If a public client can send them directly, a malicious request could attempt to:
-
-- spoof another tenant,
-- select another routing profile,
-- bypass LoRA/model restrictions,
-- poison observability or metering identity.
-
-Therefore this gateway strips all client-supplied values for:
+The gateway strips client-supplied routing and identity headers before policy evaluation:
 
 ```text
 x-tenant-id
@@ -215,178 +364,149 @@ x-internal-user-id
 x-internal-slo-tier
 ```
 
-Then it injects trusted internal values only after policy allow.
+A valid request with spoofed routing headers is not automatically denied. The spoofed values are ignored. The request is allowed only if Host, JWT, tenant, model, adapter, and quota policy still pass.
 
-Important behavior: a valid request with spoofed routing headers is not automatically denied. The spoofed values are stripped and ignored. The request is allowed only if the tenant/domain/JWT/model/adapter policy still passes, and only gateway-derived trusted headers reach AIBrix.
+### Trusted header injection
 
-
-## Hardening features added after the roast
-
-The repo now includes a second hardening layer. These features are still reference implementations, but they make the architecture much closer to a production review shape:
-
-| Area | New setting/module | What it does | Production caveat |
-|---|---|---|---|
-| Runtime quota | `APP_QUOTA_MODE=in_memory`, `quota_enforcer.py` | Enforces per-process request/input-token windows from tenant limits | Not distributed across pods |
-| Adapter governance | `APP_ADAPTER_GOVERNANCE_MODE=catalog_enforced`, `adapter_governance.py` | Requires active adapter catalog metadata, checksum, signer, model compatibility | Does not cryptographically verify artifacts |
-| Audit | `APP_AUDIT_SINK=stdout/jsonl`, `audit.py` | Emits decision audit events | JSONL is not immutable enterprise audit |
-| Billing ledger | `APP_BILLING_MODE=ledger_required`, `billing_ledger.py` | Requires upstream usage tokens and writes a reference ledger entry | Not a real invoice/reconciliation pipeline |
-| Security posture | `APP_SECURITY_POSTURE_MODE=audit/enforce`, `security_posture.py` | Blocks unsafe production-like posture in enforce mode | Heuristic checks, not full cloud compliance |
-| SLO metrics | `/metrics`, `slo_metrics.py` | Exposes request/latency/upstream-status metrics | No TTFT/GPU autoscaling loop yet |
-| KV-cache isolation intent | `runtime_isolation` registry block | Carries tenant isolation intent as internal headers | Does not prove vLLM KV-cache isolation |
-
-Detailed notes are in [`docs/08-implemented-hardening.md`](docs/08-implemented-hardening.md).
-
-## Local demo
-
-Install dependencies:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-Run the gateway in local mock mode:
-
-```bash
-APP_TENANT_REGISTRY_PATH=./config/tenants.yaml \
-APP_AUTH_MODE=mock \
-APP_ENVIRONMENT=local \
-APP_MOCK_UPSTREAM=true \
-PYTHONPATH=src \
-uvicorn tenant_policy_gateway.main:app --reload --host 0.0.0.0 --port 8080
-```
-
-Send demo requests:
-
-```bash
-make demo-a
-make demo-b
-make demo-cross
-make demo-lora
-make demo-spoof
-```
-
-Mock auth accepts local demo credentials such as:
+After an allow decision, the gateway injects trusted downstream headers for AIBrix:
 
 ```text
-Authorization: Bearer mock:tenant-a:user-123
+user: tenant-a:user-123
+external-filter: tenant=tenant-a
+config-profile: gold
+x-internal-tenant-id: tenant-a
+x-internal-user-id: user-123
 ```
 
-or, when enabled:
+These values are derived from the tenant registry and validated JWT claims. They are not accepted from public clients.
 
-```text
-x-mock-auth: tenant=tenant-a;user=user-123
+### Domain-aware tenant routing
+
+Each tenant has one or more domains:
+
+```yaml
+tenants:
+  - tenant_id: tenant-a
+    domains:
+      - tenant-a.example.local
 ```
 
-Mock mode is **not production authentication**. The application now fails configuration validation if `APP_AUTH_MODE=mock` is used outside `local`, `dev`, `development`, `test`, or `ci`, unless `APP_UNSAFE_ALLOW_MOCK_AUTH_OUTSIDE_LOCAL=true` is explicitly set for a throwaway demo.
+At request time:
 
-## Run tests
+- `Host: tenant-a.example.local` resolves to `tenant-a`,
+- the JWT tenant claim must also be `tenant-a`,
+- a tenant A token sent to a tenant B domain is denied.
+
+---
+
+## Implemented reference controls
+
+| Area | Implemented reference | Production caveat |
+|---|---|---|
+| Tenant identity | Host-domain mapping + JWT tenant claim validation | Requires trusted ingress/DNS/proxy boundary |
+| OIDC | issuer, audience, token_use, tenant claim, optional scopes/groups, JWKS cache | Not a full enterprise IdP lifecycle |
+| Header safety | strips spoofable headers and injects trusted internal headers | Downstream AIBrix must not be directly reachable |
+| Model policy | tenant model allowlist | Not a model registry product |
+| LoRA policy | tenant/model adapter allowlist + catalog metadata | Signature/provenance enforcement is still reference-level |
+| Quota | Redis Lua reference backend | Not a complete global cost-control system |
+| Billing | S3 Object Lock + DynamoDB idempotency reference | Not a full invoice/reconciliation pipeline |
+| Streaming | SSE forwarding + TTFT metrics | Billing-required modes block streaming unless usage extraction is implemented |
+| Audit | structured JSON audit/metering events | Not an immutable SIEM pipeline by itself |
+| AWS | EKS scripts, LBC, Pod Identity, NLB verification, private evidence checks | Not a complete landing zone |
+
+---
+
+## Tests
+
+Run:
 
 ```bash
 make test
 ```
 
-or directly:
+or:
 
 ```bash
 PYTHONPATH=src pytest -q
 ```
 
-Test coverage includes:
+The test suite covers:
 
-- valid tenant A request,
-- valid tenant B request,
-- tenant A token against tenant B domain denied,
-- forbidden LoRA adapter denied,
-- unknown model denied,
-- spoofed routing headers stripped and ignored,
-- missing token denied,
-- metering event emitted with non-billing-grade token source,
-- fail-closed registry load failure,
-- mock auth rejected outside local/dev/test/ci by default,
-- in-memory quota denial,
-- adapter catalog governance allow/deny,
-- JSONL audit sink,
-- ledger-required billing path,
-- `/metrics` endpoint,
-- security posture enforce mode.
+- valid tenant A and tenant B requests,
+- cross-tenant denial,
+- forbidden LoRA adapter denial,
+- unknown model denial,
+- spoofed header stripping,
+- missing token denial,
+- metering event emission,
+- fail-closed tenant registry behavior,
+- mock auth safety guardrails,
+- quota denial,
+- adapter governance allow/deny,
+- audit sink behavior,
+- billing ledger behavior,
+- metrics endpoint,
+- security posture enforcement,
+- streaming billing gate,
+- Redis quota behavior,
+- AWS demo and advanced-path asset validation.
 
-## Real OIDC/JWKS mode
+---
 
-Set:
-
-```bash
-APP_AUTH_MODE=oidc
-```
-
-Each tenant config must include issuer, audience, tenant claim, user claim, and JWKS URL:
-
-```yaml
-oidc_issuer: https://issuer.example.local/tenant-a
-oidc_audience: aibrix-gateway
-oidc_jwks_url: https://issuer.example.local/tenant-a/jwks.json
-tenant_claim: tenant_id
-user_claim: sub
-```
-
-This reference implementation uses PyJWT/JWKS validation. Production systems should add explicit OIDC discovery lifecycle, JWKS caching policy, issuer onboarding controls, key-rotation tests, revocation semantics, outage playbooks, and audit trails.
-
-## Metering and billing ledger modes
-
-The gateway emits structured JSON events containing tenant, user, domain, model, adapter, decision, status, latency, upstream status, and token fields.
-
-Default metering remains observability-oriented. Input token counts are best-effort estimates unless upstream usage is available. The event includes token source and `*_billing_grade=false` fields to avoid pretending local estimates are invoice-grade.
-
-For stricter demos, set `APP_BILLING_MODE=ledger_required`. In that mode, the gateway requires upstream `usage.prompt_tokens`, `usage.completion_tokens`, and `usage.total_tokens`. If usage is missing or inconsistent, the gateway returns `502 billing_usage_missing`; if usage is valid, it writes a JSONL reference ledger record.
-
-This is still not enterprise billing. Production billing would require model-specific tokenizer/version controls, usage reconciliation, idempotent event processing, durable external ledger storage, replay protection, and auditability.
-
-## Kubernetes layout
-
-```text
-k8s/
-  gateway-api/              # Gateway and HTTPRoute examples
-  tenant-policy-gateway/    # Deployment, Service, ConfigMap, Secret placeholder, NetworkPolicy
-  aibrix/                   # AIBrix-facing Service placeholder
-  tenants/                  # Example namespaces, quotas, policies
-```
-
-## AWS EKS adaptation
-
-For AWS EKS, the intended shape is:
-
-- public or private ALB terminates TLS and forwards to Envoy Gateway / Gateway API,
-- Tenant Policy Gateway runs in private subnets,
-- AIBrix/vLLM services run behind cluster-internal Services,
-- ECR hosts container images,
-- Secrets Manager + ASCP or External Secrets injects OIDC config,
-- Pod Identity or IRSA grants least-privilege AWS access,
-- Karpenter provisions GPU node pools for AIBrix/vLLM,
-- S3 stores model or adapter artifacts if your serving stack needs it,
-- CloudWatch and/or OpenTelemetry collects structured gateway events.
-
-These files are examples, not an enterprise landing zone. See [`docs/04-aws-eks-reference.md`](docs/04-aws-eks-reference.md).
-
-## Repository structure
+## Repository map
 
 ```text
 aibrix-multitenant-llm-gateway/
-├── README.md
-├── config/
-│   └── tenants.yaml
-├── docs/
-├── examples/
-├── k8s/
-├── prompts/
-├── src/tenant_policy_gateway/
+├── config/                         # local tenant registry examples
+├── docs/                           # architecture, threat model, audit notes, runbooks
+├── examples/                       # curl demos
+├── infra/aws/                      # eksctl and AWS env templates
+├── k8s/                            # Kubernetes manifests and overlays
+├── prompts/                        # coding/eval prompts used for repo evolution
+├── scripts/aws/                    # cheap AWS demo scripts
+├── scripts/aws-danger/             # advanced GPU full-stack scripts
+├── src/tenant_policy_gateway/      # FastAPI gateway implementation
+├── Dockerfile
 ├── Makefile
-├── pyproject.toml
-└── requirements.txt
+├── requirements.txt
+└── requirements.lock
 ```
+
+---
+
+## Recommended reading order
+
+If you are new to the repo, read in this order:
+
+1. [`docs/00-problem.md`](docs/00-problem.md)
+2. [`docs/01-architecture.md`](docs/01-architecture.md)
+3. [`docs/02-threat-model.md`](docs/02-threat-model.md)
+4. [`docs/09-aws-demo-runbook.md`](docs/09-aws-demo-runbook.md)
+5. [`docs/11-aws-full-stack-danger-zone.md`](docs/11-aws-full-stack-danger-zone.md)
+6. [`docs/15-security-controls-matrix.md`](docs/15-security-controls-matrix.md)
+7. [`docs/16-known-production-blockers.md`](docs/16-known-production-blockers.md)
+8. [`docs/19-pr9-audit-remediation.md`](docs/19-pr9-audit-remediation.md)
+
+---
 
 ## Correct positioning
 
-This repo is still not a production-ready LLM gateway.
+Use this description:
 
-It is a **production-inspired reference architecture** showing where to start when adding SaaS governance in front of AIBrix/vLLM. The second hardening layer adds real code-level hooks for quota, audit, billing-required mode, adapter catalog enforcement, security posture checks, and metrics, but those are still reference implementations unless backed by production infrastructure and validation.
+```text
+Audit-hardened AWS/EKS reference lab for multi-tenant LLM governance in front of AIBrix/vLLM.
+```
+
+Do **not** describe it as:
+
+```text
+production-ready LLM gateway
+enterprise SaaS LLM platform
+billing-grade inference platform
+complete AIBrix platform
+proven KV-cache isolated runtime
+```
+
+The best summary is:
+
+> This repository is a production-inspired, audit-hardened reference implementation. It is useful for architecture review, security discussion, LLMOps learning, AWS/EKS experimentation, and portfolio credibility. It is not a production-certified SaaS platform.

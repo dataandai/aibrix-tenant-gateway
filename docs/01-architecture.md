@@ -1,40 +1,40 @@
 # 01 — Architecture
 
-## High-level flow
+## One-sentence architecture
+
+The Tenant Policy Gateway is a SaaS governance layer in front of AIBrix/vLLM: it resolves the tenant, validates identity, enforces model/adapter policy, strips spoofable headers, applies reference quota/billing hooks, and forwards only trusted metadata to the serving substrate.
 
 ```text
 Client
-  -> Gateway API / Envoy Gateway / ALB integration
+  -> DNS / NLB / Gateway layer
   -> Tenant Policy Gateway
-  -> AIBrix Gateway / vLLM pool
+  -> AIBrix / Envoy / vLLM serving substrate
 ```
 
-AIBrix/vLLM is treated as the serving substrate. The Tenant Policy Gateway is the SaaS policy enforcement point.
+AIBrix/vLLM is intentionally treated as the serving substrate, not as the SaaS auth boundary.
 
 ## Request decision sequence
 
 1. Receive request on `/v1/chat/completions` or `/v1/completions`.
-2. Resolve tenant from `Host` domain.
-3. Validate JWT in mock or OIDC/JWKS mode.
-4. Verify JWT tenant claim equals resolved tenant.
-5. Extract requested model from request body.
-6. Extract optional LoRA adapter from supported MVP fields.
-7. Enforce tenant model allowlist.
-8. Enforce model adapter allowlist.
-9. Strip spoofable routing headers.
-10. Inject trusted AIBrix-facing headers.
-11. Proxy to upstream AIBrix service or mock upstream.
-12. Emit structured JSON metering event.
+2. Resolve tenant from the `Host` domain.
+3. Strip client-supplied routing headers from the request context.
+4. Validate JWT in local mock mode or OIDC/JWKS mode.
+5. Verify JWT tenant claim equals the resolved tenant.
+6. Validate optional OIDC controls such as `token_use`, scopes, groups, `nbf`, and leeway.
+7. Extract requested model and optional LoRA adapter.
+8. Enforce tenant model allowlist.
+9. Enforce tenant/model LoRA adapter allowlist.
+10. Optionally enforce adapter catalog and artifact-verification evidence.
+11. Enforce runtime quota through local demo mode or Redis reference mode.
+12. Block streaming when billing-required modes cannot safely account for final usage.
+13. Inject trusted AIBrix-facing headers.
+14. Proxy to mock upstream, CPU demo upstream, or AIBrix/vLLM upstream.
+15. Emit structured metering, audit, and Prometheus-compatible metrics.
+16. Optionally write billing reference events to JSONL or AWS-native S3/DynamoDB.
 
-## AIBrix integration point
+## Trusted header injection
 
-The MVP forwards allowed requests to a configurable upstream URL. In Kubernetes this is expected to be an internal service such as:
-
-```text
-http://aibrix-gateway.aibrix-system.svc.cluster.local
-```
-
-The gateway injects:
+The gateway injects these headers after an allow decision:
 
 ```text
 user: {tenant_id}:{user_id}
@@ -42,93 +42,56 @@ external-filter: tenant={tenant_id}
 config-profile: <profile>
 x-internal-tenant-id: <tenant_id>
 x-internal-user-id: <user_id>
+x-internal-kv-cache-isolation-required: <true|false>
+x-internal-runtime-isolation-mode: <mode>
 ```
 
-These headers are intended to support downstream routing, filtering, request tagging, or scheduler integration. They are not a security boundary by themselves.
+These headers are for downstream routing, request tagging, scheduler hints, and audit correlation. They are **not** a security boundary by themselves.
 
 ## Spoofed header behavior
 
-A client may send spoofed routing headers such as `external-filter: tenant=other`. The gateway does not use those values for policy decisions and does not forward them.
+A client may send a header such as `external-filter: tenant=other`. The gateway does not use that value for policy decisions and does not forward it.
 
-If the request is otherwise valid, it can still be allowed, but AIBrix receives only gateway-derived trusted headers. If the tenant/domain/JWT/model/adapter policy fails, the request is denied.
+If the request is otherwise valid, it may still be allowed. The security goal is not “deny every spoofed-header request.” The goal is stronger and more precise: client-supplied routing metadata must not influence the policy decision or downstream trusted headers.
 
-This is more precise than saying "spoofed header equals denied." The security goal is: spoofed headers must not steer policy or routing.
+## AIBrix integration point
 
-## LoRA routing model
-
-The tenant registry uses per-model adapter allowlists:
-
-```yaml
-allowed_models:
-  meta-llama/Llama-3.1-8B-Instruct:
-    allowed_lora_adapters:
-      - tenant-a-support
-      - tenant-a-sales
-```
-
-This allows the policy gateway to reject an adapter before it reaches AIBrix/vLLM. It does not implement adapter signing, artifact scanning, tenant-specific storage controls, or lifecycle approval workflows.
-
-## Metering model
-
-The gateway emits one structured JSON event per request. The event includes:
-
-- request ID,
-- tenant ID,
-- user ID,
-- domain,
-- model,
-- adapter,
-- allow/deny decision,
-- status code,
-- reason,
-- latency,
-- upstream status code when available,
-- estimated token fields with source and billing-grade flags.
-
-Token values are observability estimates, not customer billing data.
-
-## Failure behavior
-
-The gateway fails closed:
-
-- missing tenant registry: `503 registry_unavailable`,
-- unknown host/domain: `403 unknown_tenant`,
-- missing/invalid token: `401`,
-- tenant claim mismatch: `403 tenant_claim_mismatch`,
-- unknown model: `403 unknown_model`,
-- unknown adapter: `403 unknown_adapter`.
-
-## MVP production-readiness boundary
-
-This repository is production-inspired but not production-ready. A real platform needs durable metering, rate limiting, private networking, mTLS/service identity, GPU-aware autoscaling, adapter governance, and runtime isolation proof.
-
-## Post-roast hardening layer
-
-The gateway now has an additional hardening layer in front of the proxy step:
+The upstream URL is configurable. In the advanced AWS GPU path, it is expected to be a private Kubernetes service such as:
 
 ```text
-parse request
-  -> resolve tenant from Host
-  -> validate auth
-  -> enforce tenant/model/LoRA policy
-  -> optionally enforce adapter catalog governance
-  -> optionally enforce in-memory runtime quota
-  -> strip spoofable headers
-  -> inject trusted routing and isolation-intent headers
-  -> proxy to AIBrix/vLLM
-  -> optionally require upstream usage for billing ledger
-  -> emit metering, audit, and metrics
+http://aibrix-gateway.aibrix-system.svc.cluster.local
 ```
 
-New modules:
+A production design must ensure this upstream is not reachable directly by untrusted clients or untrusted workloads.
 
-- `quota_enforcer.py`: per-process reference quota enforcement,
-- `adapter_governance.py`: optional adapter catalog metadata enforcement,
-- `billing_ledger.py`: JSONL reference ledger for `ledger_required` mode,
-- `audit.py`: stdout/JSONL audit events,
-- `security_posture.py`: audit/enforce checks for unsafe deployment posture,
-- `slo_metrics.py`: Prometheus-text request/latency metrics.
+## Streaming behavior
 
-These modules are intentionally small and replaceable. In a production platform,
-quota, audit, billing, artifact governance, service identity, and autoscaling would
-usually be external systems or controllers, not only in-process Python code.
+The gateway supports `stream=true` proxying and records TTFT-style metrics. However, streaming is blocked by default when `APP_BILLING_MODE=ledger_required` or `APP_BILLING_MODE=aws_native_reference`, because the reference implementation does not yet provide billing-grade final usage extraction from streaming responses.
+
+This is intentional fail-closed behavior.
+
+## Billing behavior
+
+Billing modes are reference controls:
+
+| Mode | Behavior | Production status |
+|---|---|---|
+| `observability` | emits metering/audit events only | not billing-grade |
+| `ledger_required` | requires upstream `usage` fields and writes local ledger | reference only |
+| `aws_native_reference` | writes S3 Object Lock records with optional DynamoDB idempotency | reference only |
+
+The repository does not include invoice reconciliation, dispute handling, customer billing lifecycle, or financial controls.
+
+## Deployment paths
+
+| Path | Description |
+|---|---|
+| Local demo | FastAPI + mock auth + mock upstream for local testing |
+| CPU-only AWS demo | EKS deployment with mock upstream and public LoadBalancer for easy review |
+| Advanced AWS GPU full-stack path | Optional paid AWS lab with GPU node group, AIBrix/vLLM, Cognito, Redis, S3/DynamoDB, and Pod Identity |
+
+The Makefile target prefix `aws-danger-*` marks the advanced path as cost-bearing and quota-dependent. It is not a product name.
+
+## Production-readiness boundary
+
+This repository is production-inspired and audit-hardened, but not production-certified. The deepest remaining gaps are KV-cache isolation proof, full model/adapter supply-chain enforcement, streaming usage accounting, enterprise identity lifecycle, load-test evidence, and a complete AWS landing zone.
