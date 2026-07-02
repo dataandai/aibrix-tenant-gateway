@@ -1,0 +1,202 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tenant-gateway
+  labels:
+    name: tenant-gateway
+    app.kubernetes.io/part-of: aibrix-multitenant-llm-gateway
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tenant-registry
+  namespace: tenant-gateway
+data:
+  tenants.yaml: |
+    tenants:
+      - tenant_id: tenant-a
+        domains:
+          - tenant-a.example.local
+        oidc_issuer: https://issuer.example.local/tenant-a
+        oidc_audience: aibrix-gateway
+        oidc_jwks_url: https://issuer.example.local/tenant-a/jwks.json
+        tenant_claim: tenant_id
+        user_claim: sub
+        routing_external_filter: tenant={tenant_id}
+        config_profile: gold
+        user_header_template: "{tenant_id}:{user_id}"
+        limits:
+          requests_per_minute: 60
+          input_tokens_per_minute: 100000
+          output_tokens_per_minute: 100000
+        runtime_isolation:
+          mode: aws_demo_mock_upstream
+          kv_cache_isolation_required: true
+          kv_cache_isolation_proven: false
+          evidence: null
+        adapter_artifacts:
+          tenant-a-support:
+            artifact_uri: s3://example-lora-artifacts/tenant-a/support/v1/adapter.safetensors
+            sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            signed_by: kms-key-alias/aibrix-lora-signing
+            status: active
+            compatible_models:
+              - meta-llama/Llama-3.1-8B-Instruct
+        allowed_models:
+          meta-llama/Llama-3.1-8B-Instruct:
+            allowed_lora_adapters:
+              - tenant-a-support
+      - tenant_id: tenant-b
+        domains:
+          - tenant-b.example.local
+        oidc_issuer: https://issuer.example.local/tenant-b
+        oidc_audience: aibrix-gateway
+        oidc_jwks_url: https://issuer.example.local/tenant-b/jwks.json
+        tenant_claim: tenant_id
+        user_claim: sub
+        routing_external_filter: tenant={tenant_id}
+        config_profile: silver
+        user_header_template: "{tenant_id}:{user_id}"
+        limits:
+          requests_per_minute: 30
+          input_tokens_per_minute: 50000
+          output_tokens_per_minute: 50000
+        runtime_isolation:
+          mode: aws_demo_mock_upstream
+          kv_cache_isolation_required: true
+          kv_cache_isolation_proven: false
+          evidence: null
+        adapter_artifacts:
+          tenant-b-support:
+            artifact_uri: s3://example-lora-artifacts/tenant-b/support/v1/adapter.safetensors
+            sha256: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+            signed_by: kms-key-alias/aibrix-lora-signing
+            status: active
+            compatible_models:
+              - meta-llama/Llama-3.1-8B-Instruct
+        allowed_models:
+          meta-llama/Llama-3.1-8B-Instruct:
+            allowed_lora_adapters:
+              - tenant-b-support
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tenant-policy-gateway
+  namespace: tenant-gateway
+  labels:
+    app.kubernetes.io/name: tenant-policy-gateway
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tenant-policy-gateway
+  namespace: tenant-gateway
+  labels:
+    app.kubernetes.io/name: tenant-policy-gateway
+    app.kubernetes.io/part-of: aibrix-multitenant-llm-gateway
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tenant-policy-gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: tenant-policy-gateway
+    spec:
+      serviceAccountName: tenant-policy-gateway
+      containers:
+        - name: gateway
+          image: IMAGE_PLACEHOLDER
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: APP_TENANT_REGISTRY_PATH
+              value: /app/config/tenants.yaml
+            - name: APP_AUTH_MODE
+              value: mock
+            - name: APP_ENVIRONMENT
+              value: aws-demo
+            - name: APP_UNSAFE_ALLOW_MOCK_AUTH_OUTSIDE_LOCAL
+              value: "true"
+            - name: APP_MOCK_UPSTREAM
+              value: "true"
+            - name: APP_QUOTA_MODE
+              value: in_memory
+            - name: APP_BILLING_MODE
+              value: observability
+            - name: APP_AUDIT_SINK
+              value: stdout
+            - name: APP_ADAPTER_GOVERNANCE_MODE
+              value: catalog_enforced
+            - name: APP_SECURITY_POSTURE_MODE
+              value: audit
+            - name: APP_REQUIRE_PRIVATE_UPSTREAM
+              value: "false"
+            - name: APP_LOG_LEVEL
+              value: INFO
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tenant-registry
+              mountPath: /app/config
+              readOnly: true
+            - name: runtime-var
+              mountPath: /app/var
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: tenant-registry
+          configMap:
+            name: tenant-registry
+        - name: runtime-var
+          emptyDir:
+            medium: Memory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tenant-policy-gateway-public
+  namespace: tenant-gateway
+  labels:
+    app.kubernetes.io/name: tenant-policy-gateway
+    app.kubernetes.io/part-of: aibrix-multitenant-llm-gateway
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: tenant-policy-gateway
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

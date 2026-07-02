@@ -1,0 +1,40 @@
+# Optional service-mesh example. This is a placeholder for clusters using Istio.
+# It is not required for the local demo and must be validated in a real cluster.
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: tenant-policy-gateway-strict-mtls
+  namespace: tenant-gateway
+spec:
+  mtls:
+    mode: STRICT
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-envoy-gateway-to-tenant-policy-gateway
+  namespace: tenant-gateway
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tenant-policy-gateway
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            namespaces: ["tenant-gateway"]
+      to:
+        - operation:
+            ports: ["8080"]
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: deny-direct-aibrix-from-non-gateway
+  namespace: aibrix-system
+spec:
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            namespaces: ["tenant-gateway"]

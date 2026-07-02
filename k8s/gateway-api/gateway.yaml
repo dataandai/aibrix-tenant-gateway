@@ -1,0 +1,17 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: llm-public-gateway
+  namespace: tenant-gateway
+  labels:
+    app.kubernetes.io/name: aibrix-multitenant-llm-gateway
+spec:
+  gatewayClassName: envoy-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      hostname: "*.example.local"
+      allowedRoutes:
+        namespaces:
+          from: Same

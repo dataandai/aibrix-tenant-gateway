@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tenant-policy-gateway
+  namespace: tenant-gateway
+  labels:
+    app.kubernetes.io/name: tenant-policy-gateway
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tenant-policy-gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: tenant-policy-gateway
+    spec:
+      serviceAccountName: tenant-policy-gateway
+      containers:
+        - name: gateway
+          image: public.ecr.aws/example/aibrix-multitenant-llm-gateway:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: APP_TENANT_REGISTRY_PATH
+              value: /app/config/tenants.yaml
+            - name: APP_AUTH_MODE
+              value: oidc
+            - name: APP_MOCK_UPSTREAM
+              value: "false"
+            - name: APP_UPSTREAM_BASE_URL
+              value: http://aibrix-gateway.aibrix-system.svc.cluster.local
+            - name: APP_ENVIRONMENT
+              value: production
+            - name: APP_QUOTA_MODE
+              value: in_memory
+            - name: APP_BILLING_MODE
+              value: ledger_required
+            - name: APP_BILLING_LEDGER_PATH
+              value: /app/var/billing-ledger.jsonl
+            - name: APP_AUDIT_SINK
+              value: jsonl
+            - name: APP_AUDIT_LOG_PATH
+              value: /app/var/audit.jsonl
+            - name: APP_ADAPTER_GOVERNANCE_MODE
+              value: catalog_enforced
+            - name: APP_SECURITY_POSTURE_MODE
+              value: enforce
+            - name: APP_REQUIRE_PRIVATE_UPSTREAM
+              value: "true"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tenant-registry
+              mountPath: /app/config
+              readOnly: true
+            - name: runtime-var
+              mountPath: /app/var
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: tenant-registry
+          configMap:
+            name: tenant-registry
+        - name: runtime-var
+          emptyDir:
+            medium: Memory

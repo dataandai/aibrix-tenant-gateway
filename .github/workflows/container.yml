@@ -1,0 +1,33 @@
+name: container-reference
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-scan-sign-reference:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t aibrix-multitenant-llm-gateway:ci .
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: aibrix-multitenant-llm-gateway:ci
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+      - name: SBOM for image
+        uses: anchore/sbom-action@v0
+        with:
+          image: aibrix-multitenant-llm-gateway:ci
+          format: spdx-json
+          output-file: image.sbom.spdx.json
+      - name: Cosign reference note
+        run: |
+          echo "Install cosign and sign the pushed digest in your registry:"
+          echo "cosign sign --yes <registry>/<image>@sha256:<digest>"

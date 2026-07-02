@@ -1,0 +1,29 @@
+# Reference-only OpenTelemetry Collector shape for exporting gateway logs/metrics.
+# Replace with your organization's collector, CloudWatch, AMP, or SIEM pipeline.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-reference-config
+  namespace: tenant-gateway
+data:
+  collector.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc: {}
+          http: {}
+    processors:
+      batch: {}
+    exporters:
+      logging:
+        verbosity: basic
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [logging]
+        metrics:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [logging]

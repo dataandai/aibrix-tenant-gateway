@@ -1,0 +1,47 @@
+# DANGER ZONE: rendered by scripts/aws-danger/01-create-gpu-cluster.sh.
+# This cluster intentionally creates a GPU node group for real vLLM/AIBrix experiments.
+# It can become expensive and may fail if your account/region has no GPU quota/capacity.
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: ${CLUSTER_NAME}
+  region: ${AWS_REGION}
+
+availabilityZones:
+  - ${AWS_REGION}a
+  - ${AWS_REGION}b
+
+managedNodeGroups:
+  - name: cpu-system
+    instanceType: ${CPU_INSTANCE_TYPE}
+    desiredCapacity: 2
+    minSize: 1
+    maxSize: 4
+    volumeSize: 80
+    privateNetworking: ${AWS_DANGER_PRIVATE_NETWORKING}
+    labels:
+      workload: system
+      nodepool: cpu-system
+    tags:
+      project: aibrix-multitenant-llm-gateway
+      purpose: aws-danger-full-stack
+
+  - name: gpu-inference
+    instanceType: ${GPU_INSTANCE_TYPE}
+    desiredCapacity: ${GPU_DESIRED_CAPACITY}
+    minSize: 0
+    maxSize: ${GPU_MAX_SIZE}
+    volumeSize: ${GPU_VOLUME_SIZE_GB}
+    privateNetworking: ${AWS_DANGER_PRIVATE_NETWORKING}
+    labels:
+      workload: llm-inference
+      nodepool: gpu-inference
+      accelerator: nvidia
+    taints:
+      - key: nvidia.com/gpu
+        value: "true"
+        effect: NoSchedule
+    tags:
+      project: aibrix-multitenant-llm-gateway
+      purpose: aws-danger-full-stack

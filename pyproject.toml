@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aibrix-multitenant-llm-gateway"
+version = "0.1.0"
+description = "Reference Tenant Policy Gateway for OAuth2/OIDC multi-tenant LLM serving on Kubernetes with AIBrix/vLLM"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi==0.128.2",
+  "uvicorn[standard]==0.48.0",
+  "pydantic==2.13.4",
+  "PyYAML==6.0.3",
+  "httpx==0.28.1",
+  "PyJWT[crypto]==2.13.0",
+  "redis==7.1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==9.0.2", "pytest-asyncio==1.3.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["src/tenant_policy_gateway/tests"]
+asyncio_mode = "auto"

@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Local runtime files
+var/*.jsonl
+var/*.log
+
+# AWS demo / danger-zone rendered artifacts and secrets
+.aws-demo*.env
+.aws-demo*.yaml
+.aws-danger.env
+.aws-danger-*.env
+.aws-danger-*.yaml
+.aws-danger-*.json
+.aws-danger-manifests/
+.aws-danger-rendered/
+
+# Docker/build
+*.tar
+*.tgz
+.DS_Store

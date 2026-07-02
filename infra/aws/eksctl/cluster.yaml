@@ -1,0 +1,26 @@
+# Rendered by scripts/aws/01-create-cluster.sh.
+# This is intentionally a cheap CPU-only EKS demo cluster.
+# It does not install AIBrix/vLLM GPU serving.
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: ${CLUSTER_NAME}
+  region: ${AWS_REGION}
+availabilityZones:
+  - ${AWS_REGION}a
+  - ${AWS_REGION}b
+
+managedNodeGroups:
+  - name: cpu-demo
+    instanceType: t3.medium
+    desiredCapacity: 2
+    minSize: 1
+    maxSize: 3
+    volumeSize: 40
+    privateNetworking: false
+    labels:
+      workload: aibrix-gateway-demo
+    tags:
+      project: aibrix-multitenant-llm-gateway
+      purpose: aws-demo
