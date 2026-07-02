@@ -21,16 +21,18 @@ AIBrix/vLLM is intentionally treated as the serving substrate, not as the SaaS a
 4. Validate JWT in local mock mode or OIDC/JWKS mode.
 5. Verify JWT tenant claim equals the resolved tenant.
 6. Validate optional OIDC controls such as `token_use`, scopes, groups, `nbf`, and leeway.
-7. Extract requested model and optional LoRA adapter.
-8. Enforce tenant model allowlist.
-9. Enforce tenant/model LoRA adapter allowlist.
-10. Optionally enforce adapter catalog and artifact-verification evidence.
-11. Enforce runtime quota through local demo mode or Redis reference mode.
-12. Block streaming when billing-required modes cannot safely account for final usage.
-13. Inject trusted AIBrix-facing headers.
-14. Proxy to mock upstream, CPU demo upstream, or AIBrix/vLLM upstream.
-15. Emit structured metering, audit, and Prometheus-compatible metrics.
-16. Optionally write billing reference events to JSONL or AWS-native S3/DynamoDB.
+7. Parse the body through a strict Pydantic request contract. Unknown fields fail closed with `400 invalid_request_schema`.
+8. Extract the canonical requested model and optional canonical `lora_adapter` field from the normalized request.
+9. Estimate input tokens with the initialized deterministic tokenizer for quota decisions.
+10. Enforce tenant model allowlist.
+11. Enforce tenant/model LoRA adapter allowlist.
+12. Optionally enforce adapter catalog and artifact-verification evidence.
+13. Enforce runtime quota through local demo mode or Redis ZSET sliding-window reference mode.
+14. Block streaming when billing-required modes cannot safely account for final usage.
+15. Inject trusted AIBrix-facing headers.
+16. Proxy to mock upstream, CPU demo upstream, or AIBrix/vLLM upstream.
+17. Emit structured metering, audit, and Prometheus-compatible metrics.
+18. Optionally enqueue billing reference events to a memory-bounded batched JSONL/S3 ledger.
 
 ## Trusted header injection
 
@@ -70,6 +72,18 @@ The gateway supports `stream=true` proxying and records TTFT-style metrics. Howe
 
 This is intentional fail-closed behavior.
 
+## Strict request contract
+
+The gateway intentionally does not scan arbitrary JSON for adapter hints. Supported request bodies are parsed through strict Pydantic models for `/v1/chat/completions` and `/v1/completions`. The canonical adapter field is `lora_adapter`. Unknown fields such as vendor-specific hidden adapter parameters are rejected with `400 invalid_request_schema` instead of being forwarded silently.
+
+This is important because adapter allowlisting is only meaningful if the policy engine sees exactly the same adapter instruction that will be forwarded downstream.
+
+## Token estimation behavior
+
+Input-token estimates used for pre-forward quota decisions are produced by an initialized tokenizer. Production-like quota modes require either `tiktoken` or a local HuggingFace fast tokenizer asset. The loose character-count fallback was removed from production modes because it can undercount multilingual text and code.
+
+A deterministic UTF-8 byte upper-bound mode remains only for local/demo use. It is conservative, not billing-grade.
+
 ## Billing behavior
 
 Billing modes are reference controls:
@@ -77,10 +91,10 @@ Billing modes are reference controls:
 | Mode | Behavior | Production status |
 |---|---|---|
 | `observability` | emits metering/audit events only | not billing-grade |
-| `ledger_required` | requires upstream `usage` fields and writes local ledger | reference only |
-| `aws_native_reference` | writes S3 Object Lock records with optional DynamoDB idempotency | reference only |
+| `ledger_required` | requires upstream `usage` fields and enqueues local JSONL ledger records | reference only |
+| `aws_native_reference` | batches JSONL records into S3 Object Lock objects with optional DynamoDB idempotency | reference only |
 
-The repository does not include invoice reconciliation, dispute handling, customer billing lifecycle, or financial controls.
+The ledger is memory-bounded and flushed in batches to avoid one S3 PUT per request. The repository still does not include invoice reconciliation, dispute handling, customer billing lifecycle, or financial controls.
 
 ## Deployment paths
 

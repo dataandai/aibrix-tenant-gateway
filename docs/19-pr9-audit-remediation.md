@@ -40,11 +40,12 @@ Caveat: output-token quota and cost-budget enforcement are not implemented. Regi
 Implemented:
 
 - AWS-native ledger no longer shells out to the AWS CLI.
-- boto3 writes one object per request into the S3 Object Lock bucket.
+- PR9 replaced AWS CLI subprocess usage with boto3.
+- PR10 changed the write pattern again: billing records are now queued in a memory-bounded buffer and flushed as batched JSONL objects to S3.
 - optional DynamoDB table provides request-id idempotency with conditional `PutItem` and completion update.
 - `scripts/aws-danger/11-create-aws-native-billing-ledger.sh` creates the DynamoDB idempotency table.
 
-Caveat: this is still a reference billing ledger. It is not a complete reconciliation, invoicing, dispute, or financial-control system.
+Caveat: this is still a reference billing ledger. Batching improves cost and latency characteristics, but it is not a complete reconciliation, invoicing, dispute, or financial-control system.
 
 ## PR9-5: Adapter verification enforcement path
 

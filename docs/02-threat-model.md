@@ -28,8 +28,8 @@ AWS services              trusted only through scoped IAM and network controls
 | Cross-tenant token use | Host tenant must match JWT tenant claim | IdP lifecycle and tenant claim source of truth remain external |
 | Header spoofing | Client routing headers are stripped; trusted headers are regenerated | Direct-to-AIBrix bypass must be prevented by network/service controls |
 | Unauthorized model use | tenant/model allowlist | Model registry as source of truth is still reference-only |
-| Unauthorized LoRA adapter | tenant/model adapter allowlist + catalog checks | Runtime artifact signature enforcement is not complete |
-| Quota abuse | local demo quota or Redis reference quota | HA/failover, regional consistency, and cost budgets remain out of scope |
+| Unauthorized LoRA adapter | strict request schema + tenant/model adapter allowlist + catalog checks | Runtime artifact signature enforcement is not complete |
+| Quota abuse | local demo quota or Redis ZSET sliding-window reference quota | HA/failover, regional consistency, and cost budgets remain out of scope |
 | Billing bypass | ledger-required and AWS-native reference modes | streaming usage is blocked, not fully solved |
 | AWS credential misuse | Pod Identity/IRSA reference path | IAM policy must be reviewed and scoped by deploying org |
 | Public upstream bypass | private upstream expectation and NetworkPolicy examples | full VPC endpoint/egress proof is not included |
@@ -59,6 +59,10 @@ The gateway strips client-supplied routing headers before forwarding:
 - `x-internal-slo-tier`
 
 A valid request with spoofed routing headers may still be allowed, but the spoofed values are ignored and removed.
+
+### Strict request contract
+
+The gateway rejects unknown request fields instead of forwarding vendor-specific parameters blindly. This matters for adapter governance: only the canonical `lora_adapter` field is accepted, so hidden adapter instructions cannot bypass the allowlist by being invisible to policy evaluation.
 
 ### Quota and billing fail-closed hooks
 

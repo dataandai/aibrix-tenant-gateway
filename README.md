@@ -6,6 +6,18 @@ This repository shows how to place a SaaS governance layer in front of an LLM se
 
 This is **not** a production-certified SaaS LLM platform. It is a deployable reference lab for engineers who want to understand the hard parts of multi-tenant LLM serving on Kubernetes and AWS EKS.
 
+## PR10 core hardening update
+
+The latest core-hardening pass tightened the runtime internals behind the earlier AWS audit work:
+
+- Redis quota now uses ZSET-based sliding-window Lua scripts instead of fixed buckets.
+- Concurrency tracking is request-id based and protected by stale-entry TTL cleanup.
+- Token estimation no longer uses the loose `len(text) // 4` fallback. Production-like quota modes must initialize a real tokenizer at startup.
+- Incoming request bodies are parsed through strict Pydantic contracts. Unknown/vendor-specific fields are rejected fail-closed.
+- Billing ledger writes are memory-bounded and batched before S3/JSONL flushes, with bounded LRU replay protection.
+
+These are production-grade implementation patterns, not a production certification. Live AWS, Redis, S3/DynamoDB, tokenizer artifact, and AIBrix/vLLM load-test evidence are still required before any real SaaS use.
+
 ---
 
 ## The short version
@@ -21,9 +33,11 @@ The gateway sits before AIBrix and handles:
 - allowed LoRA adapter checks,
 - spoofed routing-header stripping,
 - trusted header injection for AIBrix routing,
-- Redis quota enforcement reference,
+- Redis sliding-window quota enforcement reference,
+- deterministic tokenizer startup checks for quota estimation,
+- strict Pydantic request schema validation,
 - audit and metering events,
-- billing ledger reference hooks,
+- batched billing ledger reference hooks,
 - streaming proxy with TTFT metrics,
 - Kubernetes and AWS EKS deployment examples.
 
@@ -58,11 +72,11 @@ flowchart TB
     subgraph Gateway["Tenant Policy Gateway - FastAPI"]
         HS["Header sanitizer<br/>strips spoofable routing headers"]
         AUTH["OIDC / JWT validation<br/>issuer, audience, token_use, tenant claim"]
-        POLICY["Policy engine<br/>tenant, model, LoRA checks"]
-        QUOTA["Quota enforcement<br/>Redis reference backend"]
+        POLICY["Policy engine<br/>strict request schema<br/>tenant, model, LoRA checks"]
+        QUOTA["Quota enforcement<br/>Redis ZSET sliding-window"]
         PROXY["Trusted proxy<br/>streaming + TTFT metrics"]
         AUDIT["Metering / audit<br/>JSON events"]
-        BILLING["Billing reference<br/>S3 Object Lock + DynamoDB idempotency"]
+        BILLING["Batched billing reference<br/>S3 Object Lock + DynamoDB idempotency"]
     end
 
     subgraph Identity["Identity and policy sources"]
@@ -72,8 +86,8 @@ flowchart TB
     end
 
     subgraph Governance["Governance backends"]
-        REDIS["Redis / ElastiCache<br/>quota counters"]
-        S3B["S3 Object Lock<br/>billing ledger reference"]
+        REDIS["Redis / ElastiCache<br/>ZSET sliding-window quota"]
+        S3B["S3 Object Lock<br/>batched JSONL ledger"]
         DDB["DynamoDB<br/>idempotency table"]
         S3A["S3 model / LoRA artifacts"]
         VERIFY["Adapter verification<br/>SHA256 evidence gate"]
@@ -246,8 +260,8 @@ Use this path only if you explicitly want to test the full infrastructure direct
 - AWS Load Balancer Controller,
 - Cognito OIDC bootstrap,
 - S3 model and LoRA artifact buckets,
-- Redis / ElastiCache quota backend reference,
-- S3 Object Lock + DynamoDB billing ledger reference,
+- Redis / ElastiCache sliding-window quota backend reference,
+- S3 Object Lock + DynamoDB batched billing ledger reference,
 - Gateway Pod Identity / IAM reference,
 - Envoy Gateway,
 - AIBrix installation,
@@ -329,8 +343,8 @@ It does **not** mean the code is reckless. The advanced path includes guardrails
 - default Cognito password rejected,
 - AWS Load Balancer Controller install step,
 - Pod Identity / IAM reference step,
-- Redis quota reference step,
-- S3/DynamoDB billing reference step,
+- Redis sliding-window quota reference step,
+- S3/DynamoDB batched billing reference step,
 - adapter verification evidence gate,
 - private networking evidence check,
 - critical installs fail fast instead of silently continuing.
@@ -343,6 +357,7 @@ Read more:
 - [`docs/12-danger-zone-production-gaps.md`](docs/12-danger-zone-production-gaps.md)
 - [`docs/13-danger-zone-audit-fixes.md`](docs/13-danger-zone-audit-fixes.md)
 - [`docs/19-pr9-audit-remediation.md`](docs/19-pr9-audit-remediation.md)
+- [`docs/20-pr10-core-hardening.md`](docs/20-pr10-core-hardening.md)
 
 ---
 
@@ -406,11 +421,12 @@ At request time:
 | Tenant identity | Host-domain mapping + JWT tenant claim validation | Requires trusted ingress/DNS/proxy boundary |
 | OIDC | issuer, audience, token_use, tenant claim, optional scopes/groups, JWKS cache | Not a full enterprise IdP lifecycle |
 | Header safety | strips spoofable headers and injects trusted internal headers | Downstream AIBrix must not be directly reachable |
+| Request schema | strict Pydantic request contracts, unknown fields rejected | Still only covers the gateway-supported API contract |
 | Model policy | tenant model allowlist | Not a model registry product |
 | LoRA policy | tenant/model adapter allowlist + catalog metadata | Signature/provenance enforcement is still reference-level |
-| Quota | Redis Lua reference backend | Not a complete global cost-control system |
-| Billing | S3 Object Lock + DynamoDB idempotency reference | Not a full invoice/reconciliation pipeline |
-| Streaming | SSE forwarding + TTFT metrics | Billing-required modes block streaming unless usage extraction is implemented |
+| Quota | Redis Lua ZSET sliding-window backend with request-id concurrency cleanup | Not a complete global cost-control system or regional quota platform |
+| Billing | memory-bounded batching + S3 Object Lock JSONL batches + DynamoDB idempotency reference | Not a full invoice/reconciliation pipeline |
+| Streaming | SSE forwarding + TTFT metrics + upstream status propagation | Billing-required modes block streaming unless usage extraction is implemented |
 | Audit | structured JSON audit/metering events | Not an immutable SIEM pipeline by itself |
 | AWS | EKS scripts, LBC, Pod Identity, NLB verification, private evidence checks | Not a complete landing zone |
 
@@ -442,6 +458,10 @@ The test suite covers:
 - fail-closed tenant registry behavior,
 - mock auth safety guardrails,
 - quota denial,
+- Redis sliding-window source checks,
+- strict schema rejection of hidden/vendor adapter fields,
+- deterministic tokenizer behavior,
+- bounded billing LRU and batched S3 flush behavior,
 - adapter governance allow/deny,
 - audit sink behavior,
 - billing ledger behavior,
@@ -486,6 +506,7 @@ If you are new to the repo, read in this order:
 6. [`docs/15-security-controls-matrix.md`](docs/15-security-controls-matrix.md)
 7. [`docs/16-known-production-blockers.md`](docs/16-known-production-blockers.md)
 8. [`docs/19-pr9-audit-remediation.md`](docs/19-pr9-audit-remediation.md)
+9. [`docs/20-pr10-core-hardening.md`](docs/20-pr10-core-hardening.md)
 
 ---
 

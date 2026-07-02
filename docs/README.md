@@ -12,6 +12,8 @@ This documentation is written for reviewers who want to understand what the repo
 6. [11 — Advanced AWS GPU Full-Stack Path](11-aws-full-stack-danger-zone.md)
 7. [15 — Security Controls Matrix](15-security-controls-matrix.md)
 8. [16 — Known Production Blockers](16-known-production-blockers.md)
+9. [19 — PR9 Audit Remediation](19-pr9-audit-remediation.md)
+10. [20 — PR10 Core Hardening](20-pr10-core-hardening.md)
 
 ## Three deployment paths
 
@@ -26,3 +28,7 @@ The Makefile target prefix `aws-danger-*` is intentionally kept for the advanced
 ## What this documentation does not claim
 
 The repository is not a production-certified SaaS LLM platform. It is an audit-hardened reference lab that shows how tenant governance can be implemented in front of AIBrix/vLLM, and where production systems still need deeper controls.
+
+## Latest core-hardening note
+
+PR10 hardened the runtime internals that earlier audit passes identified as risky: Redis quota is now sliding-window based, tokenizer estimation fails closed in production-like quota modes, the billing ledger batches writes instead of writing one S3 object per request, and the request body contract is strict Pydantic rather than loose field scavenging. See [20 — PR10 Core Hardening](20-pr10-core-hardening.md).

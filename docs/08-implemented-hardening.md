@@ -27,12 +27,12 @@ This document lists the hardening controls currently implemented in the reposito
 | Control | Status |
 |---|---|
 | Local in-memory quota for demos | Implemented |
-| Redis Lua quota reference | Implemented |
+| Redis Lua ZSET sliding-window quota reference | Implemented |
 | Tenant and user request counters | Implemented |
 | Tenant and user input-token counters | Implemented |
 | Tenant and user concurrency counters | Implemented |
 | Local JSONL audit/billing reference | Implemented |
-| AWS-native S3 Object Lock billing reference | Implemented |
+| Batched AWS-native S3 Object Lock billing reference | Implemented |
 | DynamoDB request-id idempotency reference | Implemented |
 
 ## AWS/EKS controls

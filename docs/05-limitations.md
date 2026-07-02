@@ -18,21 +18,27 @@ OIDC/JWKS mode validates issuer, audience, signature, temporal claims, tenant cl
 
 ## Quota enforcement is a reference control
 
-The repo includes local in-memory quota for demos and Redis-backed quota for the advanced AWS path. Redis mode is a stronger reference because it can work across gateway replicas, but it is still not a complete quota platform.
+The repo includes local in-memory quota for demos and Redis-backed quota for the advanced AWS path. Redis mode now uses ZSET-based sliding-window Lua scripts with request-id concurrency tracking and stale-entry TTL cleanup. This removes the fixed-window burst issue and anonymous concurrency-counter leak from earlier reference versions.
 
-Remaining gaps include HA/failover behavior, regional consistency, output-token quota, cost-budget enforcement, customer/tier policy lifecycle, reconciliation, and operational dashboards.
+It is still not a complete quota platform. Remaining gaps include Redis HA/failover policy, regional consistency, output-token quota before billing reconciliation, cost-budget enforcement, customer/tier policy lifecycle, reconciliation, and operational dashboards.
 
 ## Billing reference is not billing-grade commerce infrastructure
 
-The gateway supports observability mode, local ledger-required mode, and AWS-native reference ledger mode using S3 Object Lock and DynamoDB idempotency.
+The gateway supports observability mode, local ledger-required mode, and AWS-native reference ledger mode using S3 Object Lock and DynamoDB idempotency. Billing records are queued in a memory-bounded buffer and flushed as batched JSONL objects rather than one S3 PUT per request. Immediate replay protection uses a bounded LRU, not an unbounded in-memory set.
 
-This is useful audit evidence. It is not a complete billing system. It does not include invoice reconciliation, dispute workflows, refunds, pricing plans, tax handling, customer contracts, financial controls, or billing-grade streaming usage extraction.
+This is useful audit evidence and a better cost profile than per-request S3 writes. It is still not a complete billing system. It does not include invoice reconciliation, dispute workflows, refunds, pricing plans, tax handling, customer contracts, financial controls, or billing-grade streaming usage extraction.
 
 ## Streaming billing is intentionally fail-closed
 
 The streaming path can emit TTFT metrics and proxy SSE-style responses. In billing-required modes, streaming is blocked by default because the reference implementation does not yet extract final billing-grade usage from stream responses.
 
 This is a deliberate safety choice.
+
+## Request schema hardening does not replace complete API governance
+
+The gateway now rejects unknown request fields through strict Pydantic request contracts and only accepts the canonical `lora_adapter` field for adapter selection. This closes the hidden-vendor-field adapter bypass class that existed in earlier reference versions.
+
+However, this also means the gateway supports only the explicit OpenAI-compatible subset it models. New upstream API parameters must be intentionally added to the schema and policy contract before being forwarded.
 
 ## LoRA allowlist and artifact checks are not full adapter governance
 
@@ -65,9 +71,9 @@ The repository contains tests for application logic and static deployment assets
 | Area | Implemented reference control | Remaining limitation |
 |---|---|---|
 | Auth | mock guardrail + OIDC/JWKS validation | not full IdP lifecycle |
-| Tenant policy | domain + tenant claim + model/adapter allowlists | depends on trusted ingress and upstream isolation |
-| Quota | local in-memory + Redis reference | not full quota business system |
-| Billing | JSONL + S3 Object Lock/DynamoDB reference | not invoice-grade or streaming-complete |
+| Tenant policy | domain + tenant claim + strict schema + model/adapter allowlists | depends on trusted ingress and upstream isolation |
+| Quota | local in-memory + Redis ZSET sliding-window reference | not full quota business system |
+| Billing | batched JSONL + S3 Object Lock/DynamoDB reference | not invoice-grade or streaming-complete |
 | Streaming | proxy + TTFT metrics | billing-required streaming is blocked, not solved |
 | Adapter governance | allowlist + catalog + SHA256 verification utility | no cryptographic runtime enforcement |
 | AWS | EKS/LBC/Pod Identity/Redis/S3/DynamoDB reference | not a full landing zone |
